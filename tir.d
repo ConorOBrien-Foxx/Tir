@@ -338,12 +338,12 @@ class Tir {
         ops['~'] = delegate void(Tir inst) {
             Element[] els;
             signature sig;
-            if(matchSignature(Element.oneFunc, sig, els)) {
+            if(inst.matchSignature(Element.oneFunc, sig, els)) {
                 voidTir fn;
                 assignSignature(sig, els, &fn);
                 fn(inst);
             }
-            else if(matchSignature(Element.oneNumber, sig, els)) {
+            else if(inst.matchSignature(Element.oneNumber, sig, els)) {
                 BigInt a;
                 assignSignature(sig, els, &a);
                 push(-a);
@@ -353,7 +353,7 @@ class Tir {
         ops['r'] = delegate void(Tir inst) {
             Element[] els;
             signature sig;
-            if(matchSignature(Element.twoNumbers, sig, els)) {
+            if(inst.matchSignature(Element.twoNumbers, sig, els)) {
                 BigInt a, b;
                 assignSignature(sig, els, &a, &b);
                 Element[] res = [];
@@ -372,6 +372,21 @@ class Tir {
             Element top = inst.pop;
             push(top.truthy);
         };
+        // all
+        ops['∀'] = delegate void(Tir inst) {
+            Element top = inst.pop;
+            assert(top.type == ElementType.array);
+            Element[] arr = top.value.arr;
+
+            bool res = true;
+            foreach(el; arr) {
+                if(!el.truthy) {
+                    res = false;
+                    break;
+                }
+            }
+            push(res);
+        };
         // quote function
         meta['$'] = delegate void(Tir inst, string source, voidTir mod) {
             push(new Element(mod, source));
@@ -381,10 +396,25 @@ class Tir {
             Element top = inst.pop;
             assert(top.type == ElementType.array);
             Element[] data = top.value.arr;
-            Element[] stack;
+            Element[] tempStack;
             push(data.map!(delegate Element(Element el) {
-                callOp(mod, stack, el);
-                Element res = stack.pop;
+                callOp(mod, tempStack, el);
+                Element res = tempStack.pop;
+                return res;
+            }).array);
+        };
+        // arr func →
+        ops['→'] = delegate void(Tir inst) {
+            Element[] els;
+            signature sig;
+            assert(inst.matchSignature([ElementType.array, ElementType.func], sig, els));
+            Element[] arr;
+            voidTir fn;
+            assignSignature(sig, els, &arr, &fn);
+            Element[] tempStack;
+            push(arr.map!(delegate Element(Element el) {
+                callOp(fn, tempStack, el);
+                Element res = tempStack.pop;
                 return res;
             }).array);
         };
@@ -413,13 +443,13 @@ class Tir {
         ops['+'] = delegate void(Tir inst) {
             Element[] els;
             signature sig;
-            if(matchSignature(Element.oneArray, sig, els)) {
+            if(inst.matchSignature(Element.oneArray, sig, els)) {
                 Element[] a;
                 assignSignature(sig, els, &a);
 
                 stderr.writeln("TODO: sum");
             }
-            else if(matchSignature(Element.twoNumbers, sig, els)) {
+            else if(inst.matchSignature(Element.twoNumbers, sig, els)) {
                 BigInt a, b;
                 assignSignature(sig, els, &a, &b);
                 inst.push(a + b);
@@ -433,7 +463,6 @@ class Tir {
     }
 
     void callOp(voidTir fn, ref Element[] outStack, Element[] args...) {
-        writeln("callOp: ", args);
         auto oldStack = stack;
         stack = args;
         fn(this);
