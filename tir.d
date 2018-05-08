@@ -546,5 +546,7 @@ void main(string[] args) {
     /* stderr.writeln("Code : ", code); */
     auto inst = new Tir(code);
     inst.run();
-    writeln(inst.stack);
+    foreach(el; inst.stack) {
+        writeln(el);
+    }
 }
