@@ -543,7 +543,7 @@ void main(string[] args) {
         stderr.writeln("Assuming command line argument.");
     }
 
-    stderr.writeln("Code : ", code);
+    /* stderr.writeln("Code : ", code); */
     auto inst = new Tir(code);
     inst.run();
     writeln(inst.stack);
