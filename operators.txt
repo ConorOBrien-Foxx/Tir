@@ -1,11 +1,9 @@
 # meta operators: meta<op>
 
-
+# string: « ... »
 # ! EXCLAMATION MARK
 # factorial
 
-# " QUOTATION MARK
-# (list of characters)
 
 # # NUMBER SIGN
 
@@ -16,7 +14,7 @@
 # modulus
 
 # & AMPERSAND
-# concat list [a, b]
+# concat list pair [a, b]
 
 # ' APOSTROPHE
 # differences/derivative
@@ -79,11 +77,12 @@
 # ` GRAVE ACCENT
 
 # { LEFT CURLY BRACKET
+# begin block
 
 # | VERTICAL LINE
-# divides
 
 # } RIGHT CURLY BRACKET
+# end block
 
 # ~ TILDE
 # negation (numeric)
@@ -275,20 +274,26 @@
 # ∢ SPHERICAL ANGLE
 
 # ∣ DIVIDES
+# divides
 
 # ∤ DOES NOT DIVIDE
+# doesn't divides
 
 # ∥ PARALLEL TO
 
 # ∦ NOT PARALLEL TO
 
 # ∧ LOGICAL AND
+# logical and
 
 # ∨ LOGICAL OR
+# logical or
 
 # ∩ INTERSECTION
+# intersect
 
 # ∪ UNION
+# union
 
 # ∫ INTEGRAL
 
@@ -331,6 +336,7 @@
 # ∾ INVERTED LAZY S
 
 # ∿ SINE WAVE
+# sin of a number
 
 # ≀ WREATH PRODUCT
 
@@ -449,46 +455,71 @@
 # ≹ NEITHER GREATER-THAN NOR LESS-THAN
 
 # ≺ PRECEDES
+# is directly before
 
 # ≻ SUCCEEDS
+# is directly after
 
 # ≼ PRECEDES OR EQUAL TO
+# is directly before, or equal to
+# [a, b]: 0 <= b - a <= 1
 
 # ≽ SUCCEEDS OR EQUAL TO
+# is directly after, or equal to
+# [a, b]: 0 <= a - b <= 1
 
 # ≾ PRECEDES OR EQUIVALENT TO
+# is directly before, according to c
+# [a, b, c]: 0 <= b - a <= c
 
 # ≿ SUCCEEDS OR EQUIVALENT TO
+# is directly before, according to c
+# [a, b, c]: 0 <= as - b <= c
 
 # ⊀ DOES NOT PRECEDE
+# does not precede
 
 # ⊁ DOES NOT SUCCEED
+# does not succeed
 
 # ⊂ SUBSET OF
+# [a, b]: a contained in b, != b
 
 # ⊃ SUPERSET OF
+# [a, b]: a contains b
+# [1,2,3] [2,3] ⊃
 
 # ⊄ NOT A SUBSET OF
+# obv
 
 # ⊅ NOT A SUPERSET OF
+# obv
 
 # ⊆ SUBSET OF OR EQUAL TO
+# obv
 
 # ⊇ SUPERSET OF OR EQUAL TO
+# obv
 
 # ⊈ NEITHER A SUBSET OF NOR EQUAL TO
+# obv
 
 # ⊉ NEITHER A SUPERSET OF NOR EQUAL TO
+# obv
 
 # ⊊ SUBSET OF WITH NOT EQUAL TO
+# obv
 
 # ⊋ SUPERSET OF WITH NOT EQUAL TO
+# obv
 
 # ⊌ MULTISET
 
 # ⊍ MULTISET MULTIPLICATION
+# multiset intersection
 
 # ⊎ MULTISET UNION
+# multiset union
 
 # ⊏ SQUARE IMAGE OF
 
@@ -945,8 +976,10 @@
 # ⤘ RIGHTWARDS TWO-HEADED ARROW WITH TAIL WITH DOUBLE VERTICAL STROKE
 
 # ⤙ LEFTWARDS ARROW-TAIL
+# meta: right reduction
 
 # ⤚ RIGHTWARDS ARROW-TAIL
+# meta: left reduction
 
 # ⤛ LEFTWARDS DOUBLE ARROW-TAIL
 

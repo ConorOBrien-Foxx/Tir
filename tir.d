@@ -1,10 +1,13 @@
 import std.ascii;
 import std.algorithm.iteration;
+import std.algorithm.mutation;
 import std.algorithm.searching;
 import std.array;
 import std.bigint;
 import std.conv;
 import std.file;
+import std.functional;
+import std.range;
 import std.stdio;
 import std.string;
 import std.utf;
@@ -20,11 +23,11 @@ void push(T)(ref T[] arr, T el) {
 }
 
 enum TokenType {
-    number, command, meta, whitespace, none
+    number, string, command, meta, whitespace, none
 }
 
 enum string[] tokenTypeStrings = [
-    "number", "command", "meta", "whitespace", "none"
+    "number", "string", "command", "meta", "whitespace", "none"
 ];
 
 string toString(TokenType type) {
@@ -76,44 +79,65 @@ class Tokenizer {
     void advance(int n) {
         ptr += n;
     }
-
-    static bool isMeta(dchar c) {
-        return false;
-    }
-
+    
     bool hasLeft() {
         return ptr < code.length;
     }
 
-    void readRun(ref string str, bool function(dchar) validate) {
+    void readRun(ref string str, bool delegate(dchar) validate) {
         while(hasLeft && validate(cur)) {
             str ~= cur;
             advance;
         }
     }
 
-    string readRun(bool function(dchar) validate) {
+    string readRun(bool delegate(dchar) validate) {
         string res = "";
         readRun(res, validate);
         return res;
     }
-
+    
+    bool isMeta(dchar c) {
+        return metas.map!(e => e == c).any;
+    }
+    
+    bool isMeta() {
+        return isMeta(cur);
+    }
+    
     void step() {
         Token next = new Token();
         next.start = ptr;
         if(cur.isDigit) {
             next.type = TokenType.number;
-            readRun(next.raw, &isDigit);
-        } else if(cur.isWhite) {
-            next.type = TokenType.whitespace;
-            readRun(next.raw, &isWhite);
+            readRun(next.raw, (&isDigit).toDelegate());
         }
-        else if(metas.map!(e => e == cur).any) {
+        else if(cur.isWhite) {
+            next.type = TokenType.whitespace;
+            readRun(next.raw, (&isWhite).toDelegate());
+        }
+        else if(isMeta) {
             next.type = TokenType.meta;
+            readRun(next.raw, &isMeta);
             next.raw ~= cur;
             advance;
-            next.raw ~= cur;
-            advance;
+            // next.raw ~= cur;
+            // advance;
+        }
+        // « ... »
+        else if(cur == '«') {
+            int depth = 0;
+            do {
+                if(cur == '«') {
+                    depth++;
+                }
+                else if(cur == '»') {
+                    depth--;
+                }
+                next.raw ~= cur;
+                advance;
+            } while(depth);
+            next.type = TokenType.string;
         }
         else {
             next.type = TokenType.command;
@@ -134,12 +158,12 @@ class Tokenizer {
 
 Token[] tokenize(string str) {
     Tokenizer inst = new Tokenizer(str);
-    return inst.run();
+    return inst.run;
 }
 
 Token[] tokenize(string str, dchar[] metas) {
     Tokenizer inst = new Tokenizer(str, metas);
-    return inst.run();
+    return inst.run;
 }
 
 enum ElementType {
@@ -158,6 +182,9 @@ class Element {
 
     this(voidTir fun, string repr) {
         update(fun, repr);
+    }
+    this(int n) {
+        this(BigInt(n));
     }
     this(T)(T el) {
         update(el);
@@ -227,7 +254,7 @@ class Element {
 alias voidTir = void delegate(Tir);
 alias metaTir = void delegate(Tir, string, voidTir);
 alias signature = ElementType[];
-alias signatureAction = void delegate(Tir, ref signature);
+alias signatureAction = void delegate(Tir, ref Element[], ref signature);
 
 class Tir {
     Element[] stack = [];
@@ -269,8 +296,8 @@ class Tir {
     }
 
     signature pop2(out Element a, out Element b) {
-        b = pop();
-        a = pop();
+        b = pop;
+        a = pop;
         return signatureof([a, b]);
     }
 
@@ -278,7 +305,7 @@ class Tir {
         els = [];
         els.length = n;
         for(size_t i = n - 1; i < n; --i) {
-            els[i] = pop();
+            els[i] = pop;
         }
         return signatureof(els);
     }
@@ -299,6 +326,11 @@ class Tir {
         signature sig = peekN(n, e);
         if(sig == search) {
             popN(n, els);
+            if(beforeCall) {
+                // writeln("ACTIVATING BEFORE CALL!");
+                beforeCall(this, els, sig);
+                beforeCall = null;
+            }
             result = sig;
             return true;
         }
@@ -365,12 +397,85 @@ class Tir {
         };
         // multiplication
         ops['×'] = delegate void(Tir inst) {
-            writeln("MULTIPLY!!");
+            Element[] els;
+            signature sig;
+            if(inst.matchSignature(Element.oneArray, sig, els)) {
+                Element[] a;
+                assignSignature(sig, els, &a);
+                
+                while(a.length != 1) {
+                    callOp('×', a, a);
+                }
+                push(a.pop);
+            }
+            else if(inst.matchSignature(Element.twoNumbers, sig, els)) {
+                BigInt a, b;
+                assignSignature(sig, els, &a, &b);
+                inst.push(a * b);
+            }
+            else {
+                stderr.writeln("No matching method for `+`: " ~ els.map!(e => e.toString()).array.join(", "));
+            }
+        };
+        // divide
+        ops['÷'] = delegate void(Tir inst) {
+            Element[] els;
+            signature sig;
+            if(inst.matchSignature(Element.twoNumbers, sig, els)) {
+                BigInt a, b;
+                assignSignature(sig, els, &a, &b);
+                inst.push(a / b);
+            }
+        };
+        // pair
+        ops[','] = delegate void(Tir inst) {
+            Element[] pair;
+            inst.popN(2, pair);
+            push(pair);
         };
         // is truthy
         ops['⊨'] = delegate void(Tir inst) {
             Element top = inst.pop;
             push(top.truthy);
+        };
+        // collect stack into array
+        ops['∎'] = delegate void(Tir inst) {
+            Element[] stack = inst.stack;
+            inst.stack.length = 0;
+            inst.push(stack);
+        };
+        // meta: reduce right
+        meta['⤙'] = delegate void(Tir inst, string source, voidTir fn) {
+            Element top = inst.pop;
+            
+            assert(top.type == ElementType.array);
+            Element[] a = top.value.arr;
+            
+            while(a.length != 1) {
+                callOp(fn, a, a);
+            }
+            push(a.pop);
+        };
+        // meta: reversed arguments
+        meta['⇔'] = delegate void(Tir inst, string source, voidTir fn) {
+            inst.beforeCall = delegate void(Tir inst, ref Element[] args, ref signature sig) {
+                sig.reverse;
+                args.reverse;
+            };
+            fn(this);
+        };
+        // meta: reduce left
+        meta['⤚'] = delegate void(Tir inst, string source, voidTir fn) {
+            Element top = inst.pop;
+            
+            assert(top.type == ElementType.array);
+            Element[] a = top.value.arr.retro.array;
+            
+            while(a.length != 1) {
+                writeln("-- ", a);
+                callOp(fn, a, a);
+            }
+            push(a.pop);
         };
         // all
         ops['∀'] = delegate void(Tir inst) {
@@ -446,8 +551,11 @@ class Tir {
             if(inst.matchSignature(Element.oneArray, sig, els)) {
                 Element[] a;
                 assignSignature(sig, els, &a);
-
-                stderr.writeln("TODO: sum");
+                
+                while(a.length != 1) {
+                    callOp('+', a, a);
+                }
+                push(a.pop);
             }
             else if(inst.matchSignature(Element.twoNumbers, sig, els)) {
                 BigInt a, b;
@@ -468,6 +576,10 @@ class Tir {
         fn(this);
         outStack = stack;
         stack = oldStack;
+    }
+    
+    void callOp(dchar c, ref Element[] outStack, Element[] args...) {
+        callOp(ops[c], outStack, args);
     }
 
     void push(BigInt el) {
@@ -514,8 +626,18 @@ class Tir {
                     stderr.writefln("Undefined operator `%s` passed to meta `%s`", target, key);
                 }
                 break;
-
+            
+            case TokenType.string:
+                push(
+                    cur.raw.byDchar
+                       .map!(to!string)
+                       .array[1..$-1]
+                       .join
+                );
+                break;
+            
             default:
+                stderr.writefln("Unhandled type %s", cur.type);
                 assert(0);
         }
 
