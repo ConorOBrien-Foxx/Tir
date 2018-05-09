@@ -23,7 +23,7 @@ void push(T)(ref T[] arr, T el) {
 }
 
 enum TokenType {
-    number, string, command, meta, whitespace, none
+    number, string, command, meta, func_start, func_end, set_var, set_func, whitespace, none
 }
 
 string toString(TokenType type) {
@@ -55,6 +55,8 @@ class Tokenizer {
     protected dchar[] code;
     protected Token[] tokens = [];
     protected dchar[] metas;
+    
+    TokenType[dchar] translations;
 
     this(string code) {
         this(code, []);
@@ -63,6 +65,10 @@ class Tokenizer {
     this(string code, dchar[] metas) {
         this.code = code.byDchar.array;
         this.metas = metas;
+        translations = [
+            '{': TokenType.func_start,
+            '}': TokenType.func_end
+        ];
     }
 
     dchar cur() {
@@ -116,7 +122,9 @@ class Tokenizer {
             next.type = TokenType.meta;
             readRun(next.raw, &isMeta);
             next.raw ~= cur;
-            advance;
+            if(cur != '{') {
+                advance;
+            }
             // next.raw ~= cur;
             // advance;
         }
@@ -134,6 +142,25 @@ class Tokenizer {
                 advance;
             } while(depth);
             next.type = TokenType.string;
+        }
+        else if(cur in translations) {
+            next.type = translations[cur];
+            next.raw ~= cur;
+            advance;
+        }
+        else if(cur == ':') {
+            next.type = TokenType.set_var;
+            next.raw ~= cur;
+            advance;
+            next.raw ~= cur;
+            advance;
+        }
+        else if(cur == ';') {
+            next.type = TokenType.set_func;
+            next.raw ~= cur;
+            advance;
+            next.raw ~= cur;
+            advance;
         }
         else {
             next.type = TokenType.command;
@@ -276,6 +303,7 @@ class Tir {
     size_t ip = 0;
     voidTir[dchar] ops;
     metaTir[dchar] meta;
+    Element[dchar] vars;
 
     // actions
     signatureAction beforeCall = null;
@@ -379,8 +407,30 @@ class Tir {
             }
         }
     }
-
+    
     this(string code) {
+        assignOps;
+        tokens = code.tokenize(meta.keys);
+    }
+    
+    this(Token[] code) {
+        tokens = code;
+    }
+    
+    this(Token[] code, Tir inst) {
+        this(code);
+        inherit(inst);
+    }
+    
+    void inherit(Tir inst) {
+        ops = inst.ops;
+        meta = inst.meta;
+        stack = inst.stack;
+        vars = inst.vars;
+    }
+    
+    void assignOps() {
+        
         /* ops['h'] = delegate void(Tir inst) {
             writeln("HellO!");
         }; */
@@ -474,9 +524,9 @@ class Tir {
                 Element[] a = top.value.arr;
 
                 while(a.length != 1) {
-                    callOp(fn, a, a);
+                    inst.callOp(fn, a, a);
                 }
-                push(a.pop);
+                inst.push(a.pop);
             };
         };
         // meta: repeat N times
@@ -487,7 +537,7 @@ class Tir {
 
             return delegate void(Tir inst) {
                 foreach(e; n.iota) {
-                    fn(this);
+                    fn(inst);
                 }
             };
         };
@@ -607,10 +657,8 @@ class Tir {
                 stderr.writeln("No matching method for `+`: " ~ els.map!(e => e.toString()).array.join(", "));
             }
         };
-
-        tokens = code.tokenize(meta.keys);
     }
-
+    
     void callOp(voidTir fn, ref Element[] outStack, Element[] args...) {
         auto oldStack = stack;
         stack = args;
@@ -630,10 +678,64 @@ class Tir {
     void advance() {
         ip++;
     }
+    
+    void runAsChild(Token[] tokens) {
+        Tir subInst = new Tir(tokens, this);
+        subInst.run;
+        inherit(subInst);
+    }
+    
+    void runAsChild(string code) {
+        Token[] tokens = code.tokenize(meta.keys);
+        runAsChild(tokens);
+    }
+    
+    voidTir readFunc(ref string source) {
+        Token cur = tokens[ip];
+        Token[] inner = [];
+        int depth = 0;
+        source = "";
+        
+        assert(cur.type == TokenType.func_start);
+        
+        do {
+            if(cur.type == TokenType.func_end) {
+                depth--;
+            }
+            else if(cur.type == TokenType.func_start) {
+                depth++;
+            }
+            
+            source ~= cur.raw;
+            inner ~= cur;
+            
+            ip++;
+            if(ip >= tokens.length)
+                break;
+            
+            cur = tokens[ip];
+        } while(depth);
+        ip--;
+        
+        inner = inner[1..$-1];
+        
+        return delegate void(Tir inst) {
+            inst.runAsChild(inner);
+        };
+    }
+    
+    voidTir readFunc() {
+        string temp;
+        return readFunc(temp);
+    }
 
     void step() {
         Token cur = tokens[ip];
-        switch(cur.type) {
+        // writeln(vars);
+        if(cur.raw.length == 1 && cur.raw[0] in vars) {
+            push(vars[cur.raw[0]]);
+        }
+        else switch(cur.type) {
             case TokenType.number:
                 push(BigInt(cur.raw));
                 break;
@@ -660,16 +762,35 @@ class Tir {
 
                 /* writeln("keys ", keys); */
                 /* writefln("Meta of %s under %s", target, key); */
+                voidTir fn;
                 if(target in ops) {
-                    auto fn = ops[target];
-                    foreach_reverse(key; keys) {
-                        fn = meta[key](this, cur.raw, fn);
-                    }
-                    fn(this);
+                    fn = ops[target];
+                }
+                else if(target.isDigit) {
+                    BigInt n = BigInt(to!string(target));
+                    fn = delegate void(Tir inst) {
+                        inst.push(n);
+                    };
+                }
+                else if(target == '{') {
+                    advance;
+                    fn = readFunc;
                 }
                 else {
                     stderr.writefln("Undefined operator `%s` passed to meta `%s`", target, keys);
+                    break;
                 }
+                foreach_reverse(key; keys) {
+                    fn = meta[key](this, cur.raw, fn);
+                }
+                fn(this);
+                break;
+            
+            case TokenType.func_start:
+                // collect tokens
+                string source;
+                push(new Element(readFunc(source), source));
+                
                 break;
 
             case TokenType.string:
@@ -680,7 +801,17 @@ class Tir {
                        .join
                 );
                 break;
-
+            
+            case TokenType.set_var:
+                vars[cur.raw[1]] = pop;
+                break;
+            
+            case TokenType.set_func:
+                Element top = pop;
+                assert(top.type == ElementType.func);
+                ops[cur.raw[1]] = top.value.fun;
+                break;
+            
             default:
                 stderr.writefln("Unhandled type %s", cur.type);
                 assert(0);
