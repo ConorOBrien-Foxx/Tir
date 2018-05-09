@@ -4,7 +4,6 @@
 # ! EXCLAMATION MARK
 # factorial
 
-
 # # NUMBER SIGN
 
 # $ DOLLAR SIGN
@@ -133,12 +132,16 @@
 # ⅀ DOUBLE-STRUCK N-ARY SUMMATION
 
 # ⅁ TURNED SANS-SERIF CAPITAL G
+# auto-assign: G (peek)
 
 # ⅂ TURNED SANS-SERIF CAPITAL L
+# auto-assign: L (peek)
 
 # ⅃ REVERSED SANS-SERIF CAPITAL L
+# auto-assign: Y (pop)
 
 # ⅄ TURNED SANS-SERIF CAPITAL Y
+# auto-assign: Y (peek)
 
 # ⅋ TURNED AMPERSAND
 # reverse concat pair [b, a]
