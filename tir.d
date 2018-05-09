@@ -44,6 +44,15 @@ class Token {
         this.type = type;
         this.start = start;
     }
+    
+    string codeform() {
+        if(type == TokenType.meta && raw[$-1] == '{') {
+            return raw[0..$-1];
+        }
+        else {
+            return raw;
+        }
+    }
 
     override string toString() {
         return format("Token(%s, %s, %s)", raw, type.toString(), start);
@@ -706,7 +715,7 @@ class Tir {
                 depth++;
             }
             
-            source ~= cur.raw;
+            source ~= cur.codeform;
             inner ~= cur;
             
             ip++;
@@ -759,7 +768,8 @@ class Tir {
                 assert(chars.length >= 2);
                 dchar[] keys = chars[0..$-1];
                 dchar target = chars[$-1];
-
+                
+                string source = cur.codeform;
                 /* writeln("keys ", keys); */
                 /* writefln("Meta of %s under %s", target, key); */
                 voidTir fn;
@@ -774,14 +784,16 @@ class Tir {
                 }
                 else if(target == '{') {
                     advance;
-                    fn = readFunc;
+                    string append;
+                    fn = readFunc(append);
+                    source ~= append;
                 }
                 else {
                     stderr.writefln("Undefined operator `%s` passed to meta `%s`", target, keys);
                     break;
                 }
                 foreach_reverse(key; keys) {
-                    fn = meta[key](this, cur.raw, fn);
+                    fn = meta[key](this, source, fn);
                 }
                 fn(this);
                 break;
@@ -795,7 +807,7 @@ class Tir {
 
             case TokenType.string:
                 push(
-                    cur.raw.byDchar
+                    cur.codeform.byDchar
                        .map!(to!string)
                        .array[1..$-1]
                        .join
