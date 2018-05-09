@@ -26,12 +26,8 @@ enum TokenType {
     number, string, command, meta, whitespace, none
 }
 
-enum string[] tokenTypeStrings = [
-    "number", "string", "command", "meta", "whitespace", "none"
-];
-
 string toString(TokenType type) {
-    return tokenTypeStrings[to!int(type)];
+    return to!string(type);
 }
 
 class Token {
@@ -79,7 +75,7 @@ class Tokenizer {
     void advance(int n) {
         ptr += n;
     }
-    
+
     bool hasLeft() {
         return ptr < code.length;
     }
@@ -96,15 +92,15 @@ class Tokenizer {
         readRun(res, validate);
         return res;
     }
-    
+
     bool isMeta(dchar c) {
         return metas.map!(e => e == c).any;
     }
-    
+
     bool isMeta() {
         return isMeta(cur);
     }
-    
+
     void step() {
         Token next = new Token();
         next.start = ptr;
@@ -167,7 +163,7 @@ Token[] tokenize(string str, dchar[] metas) {
 }
 
 enum ElementType {
-    number, string, array, func
+    number, string, array, func, any
 }
 union ElementValue {
     BigInt num;
@@ -246,15 +242,33 @@ class Element {
     static signature oneFunc = [ElementType.func];
     static signature oneArray = [ElementType.array];
     static signature oneNumber = [ElementType.number];
+    static signature anyOne = [ElementType.any];
 
     static signature twoNumbers = [ElementType.number, ElementType.number];
     static signature twoStrings = [ElementType.string, ElementType.string];
+    static signature anyTwo = [ElementType.any, ElementType.any];
 }
 
 alias voidTir = void delegate(Tir);
-alias metaTir = void delegate(Tir, string, voidTir);
+alias metaTir = voidTir delegate(Tir, string, voidTir);
 alias signature = ElementType[];
 alias signatureAction = void delegate(Tir, ref Element[], ref signature);
+
+bool signatureEqual(signature as, signature bs) {
+    if(as.length != bs.length) {
+        return false;
+    }
+
+    foreach(a, b; lockstep(as, bs)) {
+        if(a != ElementType.any && b != ElementType.any) {
+            if(a != b) {
+                return false;
+            }
+        }
+    }
+
+    return true;
+}
 
 class Tir {
     Element[] stack = [];
@@ -324,7 +338,7 @@ class Tir {
         size_t n = search.length;
         Element[] e;
         signature sig = peekN(n, e);
-        if(sig == search) {
+        if(sig.signatureEqual(search)) {
             popN(n, els);
             if(beforeCall) {
                 // writeln("ACTIVATING BEFORE CALL!");
@@ -340,7 +354,11 @@ class Tir {
     void assignSignature(signature sig, Element[] els, ...) {
         for(size_t i = 0; i < els.length; i++) {
             auto type = _arguments[i];
-            if(type == typeid(BigInt*)) {
+            if(type == typeid(Element*)) {
+                Element* e = va_arg!(Element*)(_argptr);
+                *e = els[i];
+            }
+            else if(type == typeid(BigInt*)) {
                 BigInt* k = va_arg!(BigInt*)(_argptr);
                 *k = els[i].value.num;
             }
@@ -357,15 +375,15 @@ class Tir {
                 *f = els[i].value.fun;
             }
             else {
-                stderr.writeln("Unhandled type " ~ to!string(type));
+                stderr.writeln("Unhandled type " ~ to!string(type) ~ " in assignSignature");
             }
         }
     }
 
     this(string code) {
-        ops['h'] = delegate void(Tir inst) {
+        /* ops['h'] = delegate void(Tir inst) {
             writeln("HellO!");
-        };
+        }; */
         // call
         ops['~'] = delegate void(Tir inst) {
             Element[] els;
@@ -402,7 +420,7 @@ class Tir {
             if(inst.matchSignature(Element.oneArray, sig, els)) {
                 Element[] a;
                 assignSignature(sig, els, &a);
-                
+
                 while(a.length != 1) {
                     callOp('×', a, a);
                 }
@@ -429,9 +447,12 @@ class Tir {
         };
         // pair
         ops[','] = delegate void(Tir inst) {
-            Element[] pair;
-            inst.popN(2, pair);
-            push(pair);
+            Element[] els;
+            signature sig;
+            assert(inst.matchSignature(Element.anyTwo, sig, els));
+            Element a, b;
+            assignSignature(sig, els, &a, &b);
+            push([a, b]);
         };
         // is truthy
         ops['⊨'] = delegate void(Tir inst) {
@@ -445,38 +466,42 @@ class Tir {
             inst.push(stack);
         };
         // meta: reduce right
-        meta['⤙'] = delegate void(Tir inst, string source, voidTir fn) {
-            Element top = inst.pop;
-            
-            assert(top.type == ElementType.array);
-            Element[] a = top.value.arr;
-            
-            while(a.length != 1) {
-                callOp(fn, a, a);
-            }
-            push(a.pop);
+        meta['⤙'] = delegate voidTir(Tir inst, string source, voidTir fn) {
+            return delegate void(Tir inst) {
+                Element top = inst.pop;
+
+                assert(top.type == ElementType.array);
+                Element[] a = top.value.arr;
+
+                while(a.length != 1) {
+                    callOp(fn, a, a);
+                }
+                push(a.pop);
+            };
         };
         // meta: reversed arguments
-        meta['⇔'] = delegate void(Tir inst, string source, voidTir fn) {
-            inst.beforeCall = delegate void(Tir inst, ref Element[] args, ref signature sig) {
-                sig.reverse;
-                args.reverse;
+        meta['⇔'] = delegate voidTir(Tir inst, string source, voidTir fn) {
+            return delegate void(Tir inst) {
+                inst.beforeCall = delegate void(Tir inst, ref Element[] args, ref signature sig) {
+                    sig.reverse;
+                    args.reverse;
+                };
+                fn(this);
             };
-            fn(this);
         };
         // meta: reduce left
-        meta['⤚'] = delegate void(Tir inst, string source, voidTir fn) {
+        /* meta['⤚'] = delegate void(Tir inst, string source, voidTir fn) {
             Element top = inst.pop;
-            
+
             assert(top.type == ElementType.array);
             Element[] a = top.value.arr.retro.array;
-            
+
             while(a.length != 1) {
                 writeln("-- ", a);
                 callOp(fn, a, a);
             }
             push(a.pop);
-        };
+        }; */
         // all
         ops['∀'] = delegate void(Tir inst) {
             Element top = inst.pop;
@@ -493,20 +518,24 @@ class Tir {
             push(res);
         };
         // quote function
-        meta['$'] = delegate void(Tir inst, string source, voidTir mod) {
-            push(new Element(mod, source));
+        meta['$'] = delegate voidTir(Tir inst, string source, voidTir mod) {
+            return delegate void(Tir inst) {
+                push(new Element(mod, source));
+            };
         };
         // thread
-        meta['#'] = delegate void(Tir inst, string source, voidTir mod) {
-            Element top = inst.pop;
-            assert(top.type == ElementType.array);
-            Element[] data = top.value.arr;
-            Element[] tempStack;
-            push(data.map!(delegate Element(Element el) {
-                callOp(mod, tempStack, el);
-                Element res = tempStack.pop;
-                return res;
-            }).array);
+        meta['#'] = delegate voidTir(Tir inst, string source, voidTir mod) {
+            return delegate void(Tir inst) {
+                Element top = inst.pop;
+                assert(top.type == ElementType.array);
+                Element[] data = top.value.arr;
+                Element[] tempStack;
+                push(data.map!(delegate Element(Element el) {
+                    callOp(mod, tempStack, el);
+                    Element res = tempStack.pop;
+                    return res;
+                }).array);
+            };
         };
         // arr func →
         ops['→'] = delegate void(Tir inst) {
@@ -551,7 +580,7 @@ class Tir {
             if(inst.matchSignature(Element.oneArray, sig, els)) {
                 Element[] a;
                 assignSignature(sig, els, &a);
-                
+
                 while(a.length != 1) {
                     callOp('+', a, a);
                 }
@@ -577,7 +606,7 @@ class Tir {
         outStack = stack;
         stack = oldStack;
     }
-    
+
     void callOp(dchar c, ref Element[] outStack, Element[] args...) {
         callOp(ops[c], outStack, args);
     }
@@ -614,19 +643,23 @@ class Tir {
             case TokenType.meta:
                 dchar[] chars = cur.raw.byDchar.array;
                 assert(chars.length >= 2);
-                dchar key = chars[0];
-                dchar target = chars[1];
+                dchar[] keys = chars[0..$-1];
+                dchar target = chars[$-1];
 
+                /* writeln("keys ", keys); */
                 /* writefln("Meta of %s under %s", target, key); */
                 if(target in ops) {
                     auto fn = ops[target];
-                    meta[key](this, cur.raw, fn);
+                    foreach_reverse(key; keys) {
+                        fn = meta[key](this, cur.raw, fn);
+                    }
+                    fn(this);
                 }
                 else {
-                    stderr.writefln("Undefined operator `%s` passed to meta `%s`", target, key);
+                    stderr.writefln("Undefined operator `%s` passed to meta `%s`", target, keys);
                 }
                 break;
-            
+
             case TokenType.string:
                 push(
                     cur.raw.byDchar
@@ -635,7 +668,7 @@ class Tir {
                        .join
                 );
                 break;
-            
+
             default:
                 stderr.writefln("Unhandled type %s", cur.type);
                 assert(0);
