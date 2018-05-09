@@ -120,7 +120,7 @@ class Tokenizer {
             // next.raw ~= cur;
             // advance;
         }
-        // « ... »
+        // quote string « ... »
         else if(cur == '«') {
             int depth = 0;
             do {
@@ -384,7 +384,7 @@ class Tir {
         /* ops['h'] = delegate void(Tir inst) {
             writeln("HellO!");
         }; */
-        // call
+        // call/negate
         ops['~'] = delegate void(Tir inst) {
             Element[] els;
             signature sig;
@@ -477,6 +477,18 @@ class Tir {
                     callOp(fn, a, a);
                 }
                 push(a.pop);
+            };
+        };
+        // meta: repeat N times
+        meta['∐'] = delegate voidTir(Tir inst, string source, voidTir fn) {
+            Element top = inst.pop;
+            assert(top.type == ElementType.number);
+            BigInt n = top.value.num;
+
+            return delegate void(Tir inst) {
+                foreach(e; n.iota) {
+                    fn(this);
+                }
             };
         };
         // meta: reversed arguments
