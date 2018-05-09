@@ -13,6 +13,20 @@ import std.string;
 import std.utf;
 import core.vararg;
 
+class TirTypeError : Exception {
+    this(string msg, string file = __FILE__, size_t line = __LINE__) {
+        super(msg, file, line);
+    }
+
+    static void raise(string name, Element[] els) {
+        string sig = els.map!("to!string(a.type)")
+                        .array
+                        .join(", ");
+
+        throw new TirTypeError(name ~ " cannot be called with argument signature: " ~ sig);
+    }
+}
+
 T pop(T)(ref T[] arr) {
     T last = arr[$ - 1];
     arr.length--;
@@ -44,7 +58,7 @@ class Token {
         this.type = type;
         this.start = start;
     }
-    
+
     string codeform() {
         if(type == TokenType.meta && raw[$-1] == '{') {
             return raw[0..$-1];
@@ -64,7 +78,7 @@ class Tokenizer {
     protected dchar[] code;
     protected Token[] tokens = [];
     protected dchar[] metas;
-    
+
     TokenType[dchar] translations;
 
     this(string code) {
@@ -278,11 +292,16 @@ class Element {
     static signature oneFunc = [ElementType.func];
     static signature oneArray = [ElementType.array];
     static signature oneNumber = [ElementType.number];
+    static signature oneString = [ElementType.string];
     static signature anyOne = [ElementType.any];
 
     static signature twoNumbers = [ElementType.number, ElementType.number];
     static signature twoStrings = [ElementType.string, ElementType.string];
     static signature anyTwo = [ElementType.any, ElementType.any];
+
+    static signature anyN(size_t n) {
+        return cycle([ElementType.any]).take(n).array;
+    }
 }
 
 alias voidTir = void delegate(Tir);
@@ -316,6 +335,22 @@ class Tir {
 
     // actions
     signatureAction beforeCall = null;
+
+
+    this(string code) {
+        assignOps;
+        assignVars;
+        tokens = code.tokenize(meta.keys);
+    }
+
+    this(Token[] code) {
+        tokens = code;
+    }
+
+    this(Token[] code, Tir inst) {
+        this(code);
+        inherit(inst);
+    }
 
     Element pop() {
         if(stack.length) {
@@ -416,33 +451,196 @@ class Tir {
             }
         }
     }
-    
-    this(string code) {
-        assignOps;
-        tokens = code.tokenize(meta.keys);
-    }
-    
-    this(Token[] code) {
-        tokens = code;
-    }
-    
-    this(Token[] code, Tir inst) {
-        this(code);
-        inherit(inst);
-    }
-    
+
     void inherit(Tir inst) {
         ops = inst.ops;
         meta = inst.meta;
         stack = inst.stack;
         vars = inst.vars;
     }
-    
+
+    void callOp(voidTir fn, ref Element[] outStack, Element[] args...) {
+        auto oldStack = stack;
+        stack = args;
+        fn(this);
+        outStack = stack;
+        stack = oldStack;
+    }
+
+    void callOp(dchar c, ref Element[] outStack, Element[] args...) {
+        callOp(ops[c], outStack, args);
+    }
+
+    void push(BigInt el) {
+        stack ~= new Element(el);
+    }
+
+    void advance() {
+        ip++;
+    }
+
+    void runAsChild(Token[] tokens) {
+        Tir subInst = new Tir(tokens, this);
+        subInst.run;
+        inherit(subInst);
+    }
+
+    void runAsChild(string code) {
+        Token[] tokens = code.tokenize(meta.keys);
+        runAsChild(tokens);
+    }
+
+    voidTir readFunc(ref string source) {
+        Token cur = tokens[ip];
+        Token[] inner = [];
+        int depth = 0;
+        source = "";
+
+        assert(cur.type == TokenType.func_start);
+
+        do {
+            if(cur.type == TokenType.func_end) {
+                depth--;
+            }
+            else if(cur.type == TokenType.func_start) {
+                depth++;
+            }
+
+            source ~= cur.codeform;
+            inner ~= cur;
+
+            ip++;
+            if(ip >= tokens.length)
+                break;
+
+            cur = tokens[ip];
+        } while(depth);
+        ip--;
+
+        inner = inner[1..$-1];
+
+        return delegate void(Tir inst) {
+            inst.runAsChild(inner);
+        };
+    }
+
+    voidTir readFunc() {
+        string temp;
+        return readFunc(temp);
+    }
+
+    void step() {
+        Token cur = tokens[ip];
+        // writeln(vars);
+        if(cur.raw.length == 1 && cur.raw[0] in vars) {
+            push(vars[cur.raw[0]]);
+        }
+        else switch(cur.type) {
+            case TokenType.number:
+                push(BigInt(cur.raw));
+                break;
+            // do nothing
+            case TokenType.whitespace:
+                break;
+
+            case TokenType.command:
+                dchar key = cur.raw.byDchar.array[0];
+                if(key in ops) {
+                    auto fn = ops[key];
+                    fn(this);
+                }
+                else {
+                    stderr.writeln("Undefined operator `" ~ cur.raw ~ "`");
+                }
+                break;
+
+            case TokenType.meta:
+                dchar[] chars = cur.raw.byDchar.array;
+                assert(chars.length >= 2);
+                dchar[] keys = chars[0..$-1];
+                dchar target = chars[$-1];
+
+                string source = cur.codeform;
+                /* writeln("keys ", keys); */
+                /* writefln("Meta of %s under %s", target, key); */
+                voidTir fn;
+                if(target in ops) {
+                    fn = ops[target];
+                }
+                else if(target.isDigit) {
+                    BigInt n = BigInt(to!string(target));
+                    fn = delegate void(Tir inst) {
+                        inst.push(n);
+                    };
+                }
+                else if(target == '{') {
+                    advance;
+                    string append;
+                    fn = readFunc(append);
+                    source ~= append;
+                }
+                else {
+                    stderr.writefln("Undefined operator `%s` passed to meta `%s`", target, keys);
+                    break;
+                }
+                foreach_reverse(key; keys) {
+                    fn = meta[key](this, source, fn);
+                }
+                fn(this);
+                break;
+
+            case TokenType.func_start:
+                // collect tokens
+                string source;
+                push(new Element(readFunc(source), source));
+
+                break;
+
+            case TokenType.string:
+                push(
+                    cur.codeform.byDchar
+                       .map!(to!string)
+                       .array[1..$-1]
+                       .join
+                );
+                break;
+
+            case TokenType.set_var:
+                vars[cur.raw[1]] = pop;
+                break;
+
+            case TokenType.set_func:
+                Element top = pop;
+                assert(top.type == ElementType.func);
+                ops[cur.raw[1]] = top.value.fun;
+                break;
+
+            default:
+                stderr.writefln("Unhandled type %s", cur.type);
+                assert(0);
+        }
+
+        advance;
+    }
+
+    void run() {
+        while(ip < tokens.length) {
+            step;
+        }
+    }
+
+    void setVar(T)(dchar key, T el) {
+        vars[key] = new Element(el);
+    }
+
+    // uppercase values reserved for variables
+    void assignVars() {
+        setVar('S', " ");
+        setVar('T', "\t");
+        setVar('N', "\n");
+    }
+
     void assignOps() {
-        
-        /* ops['h'] = delegate void(Tir inst) {
-            writeln("HellO!");
-        }; */
         // call/negate
         ops['~'] = delegate void(Tir inst) {
             Element[] els;
@@ -491,7 +689,7 @@ class Tir {
                 inst.push(a * b);
             }
             else {
-                stderr.writeln("No matching method for `+`: " ~ els.map!(e => e.toString()).array.join(", "));
+                TirTypeError.raise("Multiply (×)", els);
             }
         };
         // divide
@@ -511,26 +709,105 @@ class Tir {
             assert(inst.matchSignature(Element.anyTwo, sig, els));
             Element a, b;
             assignSignature(sig, els, &a, &b);
-            push([a, b]);
+            inst.push([a, b]);
         };
         // is truthy
         ops['⊨'] = delegate void(Tir inst) {
-            Element top = inst.pop;
-            push(top.truthy);
+            Element[] els;
+            signature sig;
+            assert(inst.matchSignature(Element.anyOne, sig, els));
+            Element top = els[0];
+            inst.push(top.truthy);
         };
-        // collect stack into array
+        // convert to function
+        ops['⨐'] = delegate void(Tir inst) {
+            Element[] els;
+            signature sig;
+            assert(inst.matchSignature(Element.oneString, sig, els));
+            string s = els[0].value.str;
+            voidTir fn = delegate void(Tir inst) {
+                inst.runAsChild(s);
+            };
+            push(new Element(fn, "{" ~ s ~ "}"));
+        };
+        // join array
+        ops['⨝'] = delegate void(Tir inst) {
+            Element[] els;
+            signature sig;
+
+            Element[] arr;
+            // join by empty delimiter
+            if(inst.matchSignature(Element.oneArray, sig, els)) {
+                inst.assignSignature(sig, els, &arr);
+                inst.push(arr.map!(to!string).join);
+            }
+            // join by delimiter
+            else if(inst.matchSignature([ElementType.array, ElementType.any], sig, els)) {
+                Element joiner;
+                inst.assignSignature(sig, els, &arr, &joiner);
+                inst.push(arr.map!(to!string).join(to!string(joiner)));
+            }
+            else if(inst.matchSignature(Element.anyOne, sig, els)) {
+                TirTypeError.raise("Join (⨝)", els);
+            }
+        };
+        // split string
+        ops['⟠'] = delegate void(Tir inst) {
+            Element[] els;
+            signature sig;
+
+            if(inst.matchSignature(Element.twoStrings, sig, els)) {
+                string target, splitter;
+                inst.assignSignature(sig, els, &target, &splitter);
+                string[] sections = target.split(splitter);
+                inst.push(sections.map!(e => new Element(e)).array);
+            }
+            else if(inst.matchSignature(Element.anyOne, sig, els)) {
+                TirTypeError.raise("Split (⟠)", els);
+            }
+
+        };
+        // collect/group stack into array
         ops['∎'] = delegate void(Tir inst) {
-            Element[] stack = inst.stack;
-            inst.stack.length = 0;
-            inst.push(stack);
+            size_t size = inst.stack.length;
+            Element[] els;
+            signature sig;
+            assert(inst.matchSignature(Element.anyN(size), sig, els));
+            inst.push(els);
+        };
+        // collect/group N on stack into array
+        ops['⧫'] = delegate void(Tir inst) {
+            Element top = inst.pop;
+            assert(top.type == ElementType.number);
+            BigInt size = top.value.num;
+            assert(size >= 0);
+            Element[] collect;
+            signature sig;
+            assert(inst.matchSignature(Element.anyN(to!uint(size)), sig, collect));
+            push(collect);
         };
         // meta: reduce right
-        meta['⤙'] = delegate voidTir(Tir inst, string source, voidTir fn) {
+        meta['⤚'] = delegate voidTir(Tir inst, string source, voidTir fn) {
             return delegate void(Tir inst) {
                 Element top = inst.pop;
 
                 assert(top.type == ElementType.array);
                 Element[] a = top.value.arr;
+
+                while(a.length != 1) {
+                    inst.callOp(fn, a, a);
+                }
+                inst.push(a.pop);
+            };
+        };
+        // meta: reduce left
+        meta['⤙'] = delegate voidTir(Tir inst, string source, voidTir fn) {
+            return delegate void(Tir inst) {
+                Element top = inst.pop;
+
+                assert(top.type == ElementType.array);
+                Element[] a = top.value.arr.retro.array;
+                /* fn = meta['⇔'](inst, source, fn); */
 
                 while(a.length != 1) {
                     inst.callOp(fn, a, a);
@@ -560,19 +837,6 @@ class Tir {
                 fn(this);
             };
         };
-        // meta: reduce left
-        /* meta['⤚'] = delegate void(Tir inst, string source, voidTir fn) {
-            Element top = inst.pop;
-
-            assert(top.type == ElementType.array);
-            Element[] a = top.value.arr.retro.array;
-
-            while(a.length != 1) {
-                writeln("-- ", a);
-                callOp(fn, a, a);
-            }
-            push(a.pop);
-        }; */
         // all
         ops['∀'] = delegate void(Tir inst) {
             Element top = inst.pop;
@@ -651,191 +915,32 @@ class Tir {
             if(inst.matchSignature(Element.oneArray, sig, els)) {
                 Element[] a;
                 assignSignature(sig, els, &a);
-
-                while(a.length != 1) {
-                    callOp('+', a, a);
-                }
-                push(a.pop);
+                push(a);
+                inst.runAsChild("⤚+");
             }
             else if(inst.matchSignature(Element.twoNumbers, sig, els)) {
                 BigInt a, b;
                 assignSignature(sig, els, &a, &b);
                 inst.push(a + b);
             }
-            else {
-                stderr.writeln("No matching method for `+`: " ~ els.map!(e => e.toString()).array.join(", "));
+            else if(inst.matchSignature(Element.twoStrings, sig, els)) {
+                string s, t;
+                assignSignature(sig, els, &s, &t);
+                inst.push(s ~ t);
+            }
+            else if(inst.matchSignature(Element.anyOne, sig, els)) {
+                TirTypeError.raise("Add (+)", els);
             }
         };
-    }
-    
-    void callOp(voidTir fn, ref Element[] outStack, Element[] args...) {
-        auto oldStack = stack;
-        stack = args;
-        fn(this);
-        outStack = stack;
-        stack = oldStack;
-    }
-
-    void callOp(dchar c, ref Element[] outStack, Element[] args...) {
-        callOp(ops[c], outStack, args);
-    }
-
-    void push(BigInt el) {
-        stack ~= new Element(el);
-    }
-
-    void advance() {
-        ip++;
-    }
-    
-    void runAsChild(Token[] tokens) {
-        Tir subInst = new Tir(tokens, this);
-        subInst.run;
-        inherit(subInst);
-    }
-    
-    void runAsChild(string code) {
-        Token[] tokens = code.tokenize(meta.keys);
-        runAsChild(tokens);
-    }
-    
-    voidTir readFunc(ref string source) {
-        Token cur = tokens[ip];
-        Token[] inner = [];
-        int depth = 0;
-        source = "";
-        
-        assert(cur.type == TokenType.func_start);
-        
-        do {
-            if(cur.type == TokenType.func_end) {
-                depth--;
-            }
-            else if(cur.type == TokenType.func_start) {
-                depth++;
-            }
-            
-            source ~= cur.codeform;
-            inner ~= cur;
-            
-            ip++;
-            if(ip >= tokens.length)
-                break;
-            
-            cur = tokens[ip];
-        } while(depth);
-        ip--;
-        
-        inner = inner[1..$-1];
-        
-        return delegate void(Tir inst) {
-            inst.runAsChild(inner);
+        // subtract
+        ops['−'] = ops['-'] = delegate void(Tir inst) {
+            Element[] els;
+            signature sig;
+            assert(inst.matchSignature(Element.twoNumbers, sig, els));
+            BigInt a, b;
+            assignSignature(sig, els, &a, &b);
+            inst.push(a - b);
         };
-    }
-    
-    voidTir readFunc() {
-        string temp;
-        return readFunc(temp);
-    }
-
-    void step() {
-        Token cur = tokens[ip];
-        // writeln(vars);
-        if(cur.raw.length == 1 && cur.raw[0] in vars) {
-            push(vars[cur.raw[0]]);
-        }
-        else switch(cur.type) {
-            case TokenType.number:
-                push(BigInt(cur.raw));
-                break;
-            // do nothing
-            case TokenType.whitespace:
-                break;
-
-            case TokenType.command:
-                dchar key = cur.raw.byDchar.array[0];
-                if(key in ops) {
-                    auto fn = ops[key];
-                    fn(this);
-                }
-                else {
-                    stderr.writeln("Undefined operator `" ~ cur.raw ~ "`");
-                }
-                break;
-
-            case TokenType.meta:
-                dchar[] chars = cur.raw.byDchar.array;
-                assert(chars.length >= 2);
-                dchar[] keys = chars[0..$-1];
-                dchar target = chars[$-1];
-                
-                string source = cur.codeform;
-                /* writeln("keys ", keys); */
-                /* writefln("Meta of %s under %s", target, key); */
-                voidTir fn;
-                if(target in ops) {
-                    fn = ops[target];
-                }
-                else if(target.isDigit) {
-                    BigInt n = BigInt(to!string(target));
-                    fn = delegate void(Tir inst) {
-                        inst.push(n);
-                    };
-                }
-                else if(target == '{') {
-                    advance;
-                    string append;
-                    fn = readFunc(append);
-                    source ~= append;
-                }
-                else {
-                    stderr.writefln("Undefined operator `%s` passed to meta `%s`", target, keys);
-                    break;
-                }
-                foreach_reverse(key; keys) {
-                    fn = meta[key](this, source, fn);
-                }
-                fn(this);
-                break;
-            
-            case TokenType.func_start:
-                // collect tokens
-                string source;
-                push(new Element(readFunc(source), source));
-                
-                break;
-
-            case TokenType.string:
-                push(
-                    cur.codeform.byDchar
-                       .map!(to!string)
-                       .array[1..$-1]
-                       .join
-                );
-                break;
-            
-            case TokenType.set_var:
-                vars[cur.raw[1]] = pop;
-                break;
-            
-            case TokenType.set_func:
-                Element top = pop;
-                assert(top.type == ElementType.func);
-                ops[cur.raw[1]] = top.value.fun;
-                break;
-            
-            default:
-                stderr.writefln("Unhandled type %s", cur.type);
-                assert(0);
-        }
-
-        advance;
-    }
-
-    void run() {
-        while(ip < tokens.length) {
-            step;
-        }
     }
 }
 
