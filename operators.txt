@@ -110,7 +110,7 @@
 # \u{608}
 
 # ⁄ FRACTION SLASH
-# Rational division
+# meta: Rational division
 
 # ⁒ COMMERCIAL MINUS SIGN
 # monus?
@@ -252,6 +252,7 @@
 # ∔ DOT PLUS
 
 # ∕ DIVISION SLASH
+# fraction
 
 # ∖ SET MINUS
 

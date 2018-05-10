@@ -215,7 +215,7 @@ Token[] tokenize(string str, dchar[] metas) {
 }
 
 enum ElementType {
-    number, string, array, func, any
+    number, string, array, func, rational, any
 }
 union ElementValue {
     BigInt num;
@@ -235,6 +235,9 @@ class Element {
     this(int n) {
         this(BigInt(n));
     }
+    this(double n) {
+        this(Rational(n));
+    }
     this(T)(T el) {
         update(el);
     }
@@ -250,6 +253,10 @@ class Element {
     void update(Element[] arr) {
         type = ElementType.array;
         value.arr = arr;
+    }
+    void update(Rational rat) {
+        type = ElementType.rational;
+        value.rat = rat;
     }
     void update(voidTir fun) {
         update(fun, "<no representation>");
@@ -268,6 +275,8 @@ class Element {
                 return value.str.length != 0;
             case ElementType.number:
                 return value.num != 0;
+            case ElementType.rational:
+                return value.rat != 0;
             case ElementType.func:
                 return true;
 
@@ -284,6 +293,8 @@ class Element {
                 return value.str;
             case ElementType.number:
                 return to!string(value.num);
+            case ElementType.rational:
+                return to!string(value.rat);
             case ElementType.func:
                 return repr;
 
@@ -293,6 +304,7 @@ class Element {
     }
 
     static signature oneFunc = [ElementType.func];
+    static signature oneRational = [ElementType.rational];
     static signature oneArray = [ElementType.array];
     static signature oneNumber = [ElementType.number];
     static signature oneString = [ElementType.string];
@@ -806,16 +818,39 @@ class Tir {
             inst.vars['Y'] = el;
             return el;
         });
-        // assign to Y
+        // assign to L (peek)
         ops['⅂'] = unary(delegate Element(Tir inst, Element el) {
             inst.vars['L'] = el;
             return el;
         });
-        // assign to Y
+        // assign to L (pop)
         ops['⅂'] = unary(delegate Element(Tir inst, Element el) {
             inst.vars['L'] = el;
             return null;
         });
+        // fraction/rational creation
+        ops['∕'] = delegate void(Tir inst) {
+            Element[] els;
+            signature sig;
+            assert(inst.matchSignature(Element.twoNumbers, sig, els));
+            BigInt a, b;
+            inst.assignSignature(sig, els, &a, &b);
+            push(Rational(a, b));
+        };
+        // meta: rational creation
+        // doesn't work with numbers, yet
+        meta['⁄'] = delegate voidTir(Tir inst, string source, voidTir fn) {
+            Element top = inst.pop;
+            assert(top.type == ElementType.number);
+            BigInt num = top.value.num;
+            return delegate void(Tir inst) {
+                fn(inst);
+                Element next = inst.pop;
+                assert(next.type == ElementType.number);
+                BigInt den = next.value.num;
+                push(Rational(num, den));
+            };
+        };
         // collect/group stack into array
         ops['∎'] = delegate void(Tir inst) {
             size_t size = inst.stack.length;
