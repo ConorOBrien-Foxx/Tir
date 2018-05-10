@@ -1,3 +1,5 @@
+import rational;
+
 import std.ascii;
 import std.algorithm.iteration;
 import std.algorithm.mutation;
@@ -220,6 +222,7 @@ union ElementValue {
     string str;
     Element[] arr;
     voidTir fun;
+    Rational rat;
 }
 class Element {
     ElementValue value;
