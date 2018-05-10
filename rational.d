@@ -86,7 +86,6 @@ public:
         Rational negativeHalfC = new Rational(-1, -2);
         assert(negativeHalfC.numerator == 1);
         assert(negativeHalfC.denominator == 2);
-
     }
 
     static Rational opCall(T, K)(T n, K d) {
@@ -161,8 +160,11 @@ public:
 
     unittest {
         auto a = Rational(1, 2);
+        // 1 / (1/2) == 2
         assert(a.reciprocal == 2);
+        // 1 / 1 / (1/2) == 1/2
         assert(a.reciprocal.reciprocal == a);
+        // 1 / (4 / 3) == 3 / 4
         assert(Rational(4, 3).reciprocal == Rational(3, 4));
     }
 
@@ -229,7 +231,7 @@ public:
         return add(other.negate);
     }
     Rational subtract(T)(T other) {
-        return mixin("add(-Rational(other))");
+        return mixin("add(Rational(other).negate)");
     }
 
     unittest {
@@ -295,7 +297,6 @@ public:
 
         // (1/2) / 2 == 1/4
         assert(Rational(1, 2) / 2 == Rational(1, 4));
-
         // (1/2) / 0.5 = 1
         assert(Rational(1, 2) / 0.5 == 1);
     }
