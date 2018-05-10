@@ -295,7 +295,7 @@ public:
 
         // (1/2) / 2 == 1/4
         assert(Rational(1, 2) / 2 == Rational(1, 4));
-        
+
         // (1/2) / 0.5 = 1
         assert(Rational(1, 2) / 0.5 == 1);
     }
@@ -347,12 +347,4 @@ public:
     override string toString() {
         return format("%s/%s", numerator, denominator);
     }
-}
-
-void main() {
-    /* writeln(Rational(1, 2) - Rational(1, 2)); */
-    /* writeln(Rational(104348, 33215).decimalForm(6)); */
-    /* auto test = Rational(104348, 33215);
-    writeln(test == test);
-    writeln(test.toFixed(100)); */
 }
