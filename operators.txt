@@ -32,7 +32,7 @@
 # pair [a, b]
 
 # - HYPHEN-MINUS
-# glue?
+# subtraction
 
 # . FULL STOP
 # terminate?
@@ -41,9 +41,10 @@
 # quotient group?
 
 # : COLON
-# variable assignment?
+# variable assignment
 
 # ; SEMICOLON
+# function assignment
 
 # < LESS-THAN SIGN
 # less than

@@ -557,7 +557,7 @@ class Tir {
     void step() {
         Token cur = tokens[ip];
         // writeln(vars);
-        if(cur.raw.length == 1 && cur.raw[0] in vars) {
+        if(cur.raw.length >= 1 && cur.raw[0] in vars) {
             push(vars[cur.raw[0]]);
         }
         else switch(cur.type) {
@@ -674,7 +674,7 @@ class Tir {
     }
 
     void assignOps() {
-        aliasFunc('⨊', "+2%");
+        aliasFunc('⨊', "#{2%}+");
         // call/negate
         ops['~'] = delegate void(Tir inst) {
             Element[] els;
@@ -711,11 +711,8 @@ class Tir {
             if(inst.matchSignature(Element.oneArray, sig, els)) {
                 Element[] a;
                 assignSignature(sig, els, &a);
-
-                while(a.length != 1) {
-                    callOp('×', a, a);
-                }
-                push(a.pop);
+                inst.push(a);
+                inst.runAsChild("⤚×");
             }
             else if(inst.matchSignature(Element.twoNumbers, sig, els)) {
                 BigInt a, b;
@@ -837,6 +834,16 @@ class Tir {
             inst.assignSignature(sig, els, &a, &b);
             push(Rational(a, b));
         };
+        // meta: all yield truthy
+        meta['≀'] = delegate voidTir(Tir inst, string source, voidTir fn) {
+            Element top = inst.pop;
+            assert(top.value == ElementType.array);
+            // Element[] arr = top.value.arr;
+            // arr.map!()
+            inst.push(top);
+            inst.push(fn);
+            inst.runAsChild("→#⊨∀");
+        };
         // meta: rational creation
         // doesn't work with numbers, yet
         meta['⁄'] = delegate voidTir(Tir inst, string source, voidTir fn) {
@@ -946,7 +953,7 @@ class Tir {
                 fn(this);
             };
         };
-        // all
+        // all are truthy
         ops['∀'] = delegate void(Tir inst) {
             Element top = inst.pop;
             assert(top.type == ElementType.array);
