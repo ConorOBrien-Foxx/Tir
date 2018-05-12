@@ -1,4 +1,5 @@
 import rational;
+import codepage;
 
 import std.ascii;
 import std.algorithm.iteration;
@@ -1209,6 +1210,7 @@ void main(string[] args) {
         stderr.writeln("Assuming command line argument.");
     }
 
+    /* writeln("Codepage: ", getCodepage); */
     /* stderr.writeln("Code : ", code); */
     auto inst = new Tir(code);
     inst.run();
