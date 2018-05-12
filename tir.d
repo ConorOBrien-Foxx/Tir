@@ -697,6 +697,7 @@ class Tir {
 
     static void assignOps(Tir base) {
         base.aliasFunc('⨊', "#{2%}+");
+        base.aliasFunc('∄', "∃");
         // call/negate
         base.ops['~'] = delegate void(Tir inst) {
             Element[] els;
@@ -827,6 +828,10 @@ class Tir {
             }
 
         };
+        // logical negation
+        base.ops['¬'] = unary(delegate Element(Tir inst, Element el) {
+            return new Element(!el.truthy);
+        });
         // assign to G
         base.ops['⅁'] = unary(delegate Element(Tir inst, Element el) {
             inst.vars['G'] = el;
@@ -861,11 +866,19 @@ class Tir {
             return delegate void(Tir inst) {
                 Element top = inst.pop;
                 assert(top.type == ElementType.array);
-                // Element[] arr = top.value.arr;
-                // arr.map!()
                 inst.push(top);
                 inst.push(fn);
                 inst.runAsChild("→#⊨∀");
+            };
+        };
+        // meta: any yield truthy according to <fn>
+        base.meta['∽'] = delegate voidTir(Tir inst, string source, voidTir fn) {
+            return delegate void(Tir inst) {
+                Element top = inst.pop;
+                assert(top.type == ElementType.array);
+                inst.push(top);
+                inst.push(fn);
+                inst.runAsChild("→#⊨∃");
             };
         };
         // meta: rational creation
@@ -987,6 +1000,21 @@ class Tir {
             foreach(el; arr) {
                 if(!el.truthy) {
                     res = false;
+                    break;
+                }
+            }
+            inst.push(res);
+        };
+        // any are truthy
+        base.ops['∃'] = delegate void(Tir inst) {
+            Element top = inst.pop;
+            assert(top.type == ElementType.array);
+            Element[] arr = top.value.arr;
+
+            bool res = false;
+            foreach(el; arr) {
+                if(el.truthy) {
+                    res = true;
                     break;
                 }
             }

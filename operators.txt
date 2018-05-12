@@ -215,8 +215,10 @@
 # ∂ PARTIAL DIFFERENTIAL
 
 # ∃ THERE EXISTS
+# any are truthy
 
 # ∄ THERE DOES NOT EXIST
+# none are truthy
 
 # ∅ EMPTY SET
 
@@ -340,6 +342,7 @@
 # ∼ TILDE OPERATOR
 
 # ∽ REVERSED TILDE
+# meta: any
 
 # ∾ INVERTED LAZY S
 
@@ -347,6 +350,7 @@
 # sin of a number
 
 # ≀ WREATH PRODUCT
+# meta: all
 
 # ≁ NOT TILDE
 
