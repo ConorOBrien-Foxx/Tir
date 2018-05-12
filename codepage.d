@@ -1,10 +1,10 @@
 import std.array;
 import std.utf : byDchar;
-import std.string : outdent, strip, split;
 // temporary encoding order
 
 
 dchar[] getCodepage() {
+    // TODO: decide on an ordering
     static codepage = [
         "⅋+¬∎⧫%r,×℘∀−⨝→⅄⨊",
         " !\"#$%&'()*+,-./",
