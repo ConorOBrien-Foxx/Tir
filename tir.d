@@ -29,6 +29,12 @@ class TirTypeError : Exception {
     }
 }
 
+class IndexingError : Exception {
+    this(string msg, string file = __FILE__, size_t line = __LINE__) {
+        super(msg, file, line);
+    }
+}
+
 T pop(T)(ref T[] arr) {
     T last = arr[$ - 1];
     arr.length--;
@@ -362,8 +368,8 @@ class Tir {
 
 
     this(string code) {
-        assignOps;
-        assignVars;
+        Tir.assignOps(this);
+        Tir.assignVars(this);
         tokens = code.tokenize(meta.keys);
     }
 
@@ -426,6 +432,10 @@ class Tir {
         els.length = n;
         for(size_t i = n - 1; i < n; --i) {
             /* writefln("n,i: %s,%s", n, i); */
+            // detect underflow
+            if(stack.length - n + i > stack.length) {
+                throw new IndexingError("peekN tried to peek more elements than in the stack!");
+            }
             els[i] = stack[$ - n + i];
         }
         return signatureof(els);
@@ -434,7 +444,12 @@ class Tir {
     bool matchSignature(signature search, out signature result, out Element[] els) {
         size_t n = search.length;
         Element[] e;
-        signature sig = peekN(n, e);
+        signature sig;
+        try {
+            sig = peekN(n, e);
+        } catch(IndexingError err) {
+            return false;
+        }
         if(sig.signatureEqual(search)) {
             popN(n, els);
             if(beforeCall) {
@@ -554,6 +569,13 @@ class Tir {
         return readFunc(temp);
     }
 
+    void debugStack() {
+        writeln("== stack debug ==");
+        foreach(i, el; stack.enumerate) {
+            writefln("stack[%s] = %s", i, el);
+        }
+    }
+
     void step() {
         Token cur = tokens[ip];
         // writeln(vars);
@@ -586,8 +608,8 @@ class Tir {
                 dchar target = chars[$-1];
 
                 string source = cur.codeform;
-                /* writeln("keys ", keys); */
-                /* writefln("Meta of %s under %s", target, key); */
+                /* writeln("keys ", keys);
+                writefln("Meta of %s under %s", target, keys); */
                 voidTir fn;
                 if(target in ops) {
                     fn = ops[target];
@@ -667,36 +689,36 @@ class Tir {
     }
 
     // uppercase values reserved for variables
-    void assignVars() {
-        setVar('S', " ");
-        setVar('T', "\t");
-        setVar('N', "\n");
+    static void assignVars(Tir base) {
+        base.setVar('S', " ");
+        base.setVar('T', "\t");
+        base.setVar('N', "\n");
     }
 
-    void assignOps() {
-        aliasFunc('⨊', "#{2%}+");
+    static void assignOps(Tir base) {
+        base.aliasFunc('⨊', "#{2%}+");
         // call/negate
-        ops['~'] = delegate void(Tir inst) {
+        base.ops['~'] = delegate void(Tir inst) {
             Element[] els;
             signature sig;
             if(inst.matchSignature(Element.oneFunc, sig, els)) {
                 voidTir fn;
-                assignSignature(sig, els, &fn);
+                inst.assignSignature(sig, els, &fn);
                 fn(inst);
             }
             else if(inst.matchSignature(Element.oneNumber, sig, els)) {
                 BigInt a;
-                assignSignature(sig, els, &a);
-                push(-a);
+                inst.assignSignature(sig, els, &a);
+                inst.push(-a);
             }
         };
         // range
-        ops['r'] = delegate void(Tir inst) {
+        base.ops['r'] = delegate void(Tir inst) {
             Element[] els;
             signature sig;
             if(inst.matchSignature(Element.twoNumbers, sig, els)) {
                 BigInt a, b;
-                assignSignature(sig, els, &a, &b);
+                inst.assignSignature(sig, els, &a, &b);
                 Element[] res = [];
                 for(BigInt i = a; i < b; i++) {
                     res ~= new Element(i);
@@ -705,18 +727,18 @@ class Tir {
             }
         };
         // multiplication
-        ops['×'] = delegate void(Tir inst) {
+        base.ops['×'] = delegate void(Tir inst) {
             Element[] els;
             signature sig;
             if(inst.matchSignature(Element.oneArray, sig, els)) {
                 Element[] a;
-                assignSignature(sig, els, &a);
+                inst.assignSignature(sig, els, &a);
                 inst.push(a);
                 inst.runAsChild("⤚×");
             }
             else if(inst.matchSignature(Element.twoNumbers, sig, els)) {
                 BigInt a, b;
-                assignSignature(sig, els, &a, &b);
+                inst.assignSignature(sig, els, &a, &b);
                 inst.push(a * b);
             }
             else {
@@ -724,26 +746,26 @@ class Tir {
             }
         };
         // divide
-        ops['÷'] = delegate void(Tir inst) {
+        base.ops['÷'] = delegate void(Tir inst) {
             Element[] els;
             signature sig;
             if(inst.matchSignature(Element.twoNumbers, sig, els)) {
                 BigInt a, b;
-                assignSignature(sig, els, &a, &b);
+                inst.assignSignature(sig, els, &a, &b);
                 inst.push(a / b);
             }
         };
         // pair
-        ops[','] = delegate void(Tir inst) {
+        base.ops[','] = delegate void(Tir inst) {
             Element[] els;
             signature sig;
             assert(inst.matchSignature(Element.anyTwo, sig, els));
             Element a, b;
-            assignSignature(sig, els, &a, &b);
+            inst.assignSignature(sig, els, &a, &b);
             inst.push([a, b]);
         };
         // is truthy
-        ops['⊨'] = delegate void(Tir inst) {
+        base.ops['⊨'] = delegate void(Tir inst) {
             Element[] els;
             signature sig;
             assert(inst.matchSignature(Element.anyOne, sig, els));
@@ -751,14 +773,14 @@ class Tir {
             inst.push(top.truthy);
         };
         // print/output single entity
-        ops['⨞'] = delegate void(Tir inst) {
+        base.ops['⨞'] = delegate void(Tir inst) {
             Element[] els;
             signature sig;
             assert(inst.matchSignature(Element.anyOne, sig, els));
             writeln(els[0]);
         };
         // convert to function
-        ops['⨐'] = delegate void(Tir inst) {
+        base.ops['⨐'] = delegate void(Tir inst) {
             Element[] els;
             signature sig;
             assert(inst.matchSignature(Element.oneString, sig, els));
@@ -766,10 +788,10 @@ class Tir {
             voidTir fn = delegate void(Tir inst) {
                 inst.runAsChild(s);
             };
-            push(new Element(fn, "{" ~ s ~ "}"));
+            inst.push(new Element(fn, "{" ~ s ~ "}"));
         };
         // join array
-        ops['⨝'] = delegate void(Tir inst) {
+        base.ops['⨝'] = delegate void(Tir inst) {
             Element[] els;
             signature sig;
 
@@ -790,7 +812,7 @@ class Tir {
             }
         };
         // split string
-        ops['⟠'] = delegate void(Tir inst) {
+        base.ops['⟠'] = delegate void(Tir inst) {
             Element[] els;
             signature sig;
 
@@ -806,47 +828,49 @@ class Tir {
 
         };
         // assign to G
-        ops['⅁'] = unary(delegate Element(Tir inst, Element el) {
+        base.ops['⅁'] = unary(delegate Element(Tir inst, Element el) {
             inst.vars['G'] = el;
             return el;
         });
         // assign to Y
-        ops['⅄'] = unary(delegate Element(Tir inst, Element el) {
+        base.ops['⅄'] = unary(delegate Element(Tir inst, Element el) {
             inst.vars['Y'] = el;
             return el;
         });
         // assign to L (peek)
-        ops['⅂'] = unary(delegate Element(Tir inst, Element el) {
+        base.ops['⅂'] = unary(delegate Element(Tir inst, Element el) {
             inst.vars['L'] = el;
             return el;
         });
         // assign to L (pop)
-        ops['⅂'] = unary(delegate Element(Tir inst, Element el) {
+        base.ops['⅂'] = unary(delegate Element(Tir inst, Element el) {
             inst.vars['L'] = el;
             return null;
         });
         // fraction/rational creation
-        ops['∕'] = delegate void(Tir inst) {
+        base.ops['∕'] = delegate void(Tir inst) {
             Element[] els;
             signature sig;
             assert(inst.matchSignature(Element.twoNumbers, sig, els));
             BigInt a, b;
             inst.assignSignature(sig, els, &a, &b);
-            push(Rational(a, b));
+            inst.push(Rational(a, b));
         };
-        // meta: all yield truthy
-        meta['≀'] = delegate voidTir(Tir inst, string source, voidTir fn) {
-            Element top = inst.pop;
-            assert(top.value == ElementType.array);
-            // Element[] arr = top.value.arr;
-            // arr.map!()
-            inst.push(top);
-            inst.push(fn);
-            inst.runAsChild("→#⊨∀");
+        // meta: all yield truthy according to <fn>
+        base.meta['≀'] = delegate voidTir(Tir inst, string source, voidTir fn) {
+            return delegate void(Tir inst) {
+                Element top = inst.pop;
+                assert(top.type == ElementType.array);
+                // Element[] arr = top.value.arr;
+                // arr.map!()
+                inst.push(top);
+                inst.push(fn);
+                inst.runAsChild("→#⊨∀");
+            };
         };
         // meta: rational creation
         // doesn't work with numbers, yet
-        meta['⁄'] = delegate voidTir(Tir inst, string source, voidTir fn) {
+        base.meta['⁄'] = delegate voidTir(Tir inst, string source, voidTir fn) {
             Element top = inst.pop;
             assert(top.type == ElementType.number);
             BigInt num = top.value.num;
@@ -855,11 +879,11 @@ class Tir {
                 Element next = inst.pop;
                 assert(next.type == ElementType.number);
                 BigInt den = next.value.num;
-                push(Rational(num, den));
+                inst.push(Rational(num, den));
             };
         };
         // collect/group stack into array
-        ops['∎'] = delegate void(Tir inst) {
+        base.ops['∎'] = delegate void(Tir inst) {
             size_t size = inst.stack.length;
             Element[] els;
             signature sig;
@@ -867,7 +891,7 @@ class Tir {
             inst.push(els);
         };
         // collect/group N on stack into array
-        ops['⧫'] = delegate void(Tir inst) {
+        base.ops['⧫'] = delegate void(Tir inst) {
             Element top = inst.pop;
             assert(top.type == ElementType.number);
             BigInt size = top.value.num;
@@ -875,19 +899,19 @@ class Tir {
             Element[] collect;
             signature sig;
             assert(inst.matchSignature(Element.anyN(to!uint(size)), sig, collect));
-            push(collect);
+            inst.push(collect);
         };
         // meta: while loop
-        meta['⫿'] = delegate voidTir(Tir inst, string source, voidTir fn) {
+        base.meta['⫿'] = delegate voidTir(Tir inst, string source, voidTir fn) {
             voidTir condition;
             Element[] els;
             signature sig;
             if(inst.matchSignature(Element.oneFunc, sig, els)) {
-                assignSignature(sig, els, &condition);
+                inst.assignSignature(sig, els, &condition);
             }
             else if(inst.matchSignature(Element.anyOne, sig, els)) {
                 Element t;
-                assignSignature(sig, els, &t);
+                inst.assignSignature(sig, els, &t);
                 condition = delegate void(Tir inst) {
                     inst.push(t);
                 };
@@ -903,7 +927,7 @@ class Tir {
             };
         };
         // meta: reduce right
-        meta['⤚'] = delegate voidTir(Tir inst, string source, voidTir fn) {
+        base.meta['⤚'] = delegate voidTir(Tir inst, string source, voidTir fn) {
             return delegate void(Tir inst) {
                 Element top = inst.pop;
 
@@ -917,7 +941,7 @@ class Tir {
             };
         };
         // meta: reduce left
-        meta['⤙'] = delegate voidTir(Tir inst, string source, voidTir fn) {
+        base.meta['⤙'] = delegate voidTir(Tir inst, string source, voidTir fn) {
             return delegate void(Tir inst) {
                 Element top = inst.pop;
 
@@ -932,7 +956,7 @@ class Tir {
             };
         };
         // meta: repeat N times
-        meta['∐'] = delegate voidTir(Tir inst, string source, voidTir fn) {
+        base.meta['∐'] = delegate voidTir(Tir inst, string source, voidTir fn) {
             Element top = inst.pop;
             assert(top.type == ElementType.number);
             BigInt n = top.value.num;
@@ -944,17 +968,17 @@ class Tir {
             };
         };
         // meta: reversed arguments
-        meta['⇔'] = delegate voidTir(Tir inst, string source, voidTir fn) {
+        base.meta['⇔'] = delegate voidTir(Tir inst, string source, voidTir fn) {
             return delegate void(Tir inst) {
                 inst.beforeCall = delegate void(Tir inst, ref Element[] args, ref signature sig) {
                     sig.reverse;
                     args.reverse;
                 };
-                fn(this);
+                fn(inst);
             };
         };
         // all are truthy
-        ops['∀'] = delegate void(Tir inst) {
+        base.ops['∀'] = delegate void(Tir inst) {
             Element top = inst.pop;
             assert(top.type == ElementType.array);
             Element[] arr = top.value.arr;
@@ -966,104 +990,111 @@ class Tir {
                     break;
                 }
             }
-            push(res);
+            inst.push(res);
         };
         // quote function
-        meta['$'] = delegate voidTir(Tir inst, string source, voidTir mod) {
+        base.meta['$'] = delegate voidTir(Tir inst, string source, voidTir mod) {
             return delegate void(Tir inst) {
-                push(new Element(mod, source));
+                inst.push(new Element(mod, source));
             };
         };
         // thread
-        meta['#'] = delegate voidTir(Tir inst, string source, voidTir mod) {
+        base.meta['#'] = delegate voidTir(Tir inst, string source, voidTir mod) {
             return delegate void(Tir inst) {
                 Element top = inst.pop;
                 assert(top.type == ElementType.array);
                 Element[] data = top.value.arr;
                 Element[] tempStack;
-                push(data.map!(delegate Element(Element el) {
-                    callOp(mod, tempStack, el);
+                inst.push(data.map!(delegate Element(Element el) {
+                    inst.callOp(mod, tempStack, el);
                     Element res = tempStack.pop;
                     return res;
                 }).array);
             };
         };
+        // map
         // arr func →
-        ops['→'] = delegate void(Tir inst) {
+        base.ops['→'] = delegate void(Tir inst) {
             Element[] els;
             signature sig;
             assert(inst.matchSignature([ElementType.array, ElementType.func], sig, els));
+
             Element[] arr;
             voidTir fn;
-            assignSignature(sig, els, &arr, &fn);
+            inst.assignSignature(sig, els, &arr, &fn);
+
             Element[] tempStack;
-            push(arr.map!(delegate Element(Element el) {
-                callOp(fn, tempStack, el);
+            inst.push(arr.map!(delegate Element(Element el) {
+                inst.callOp(fn, tempStack, el);
                 Element res = tempStack.pop;
                 return res;
             }).array);
         };
-        /* meta['⇷'] = delegate void(Tir inst) {
+        /* base.meta['⇷'] = delegate void(Tir inst) {
             writeln("metaa");
         }; */
         // to string
-        ops['s'] = delegate void(Tir inst) {
+        base.ops['s'] = delegate void(Tir inst) {
             Element top = inst.pop;
             if(top.type == ElementType.number) {
                 BigInt count = top.value.num;
                 Element[] members;
-                signature sig = popN(to!size_t(count), members);
+                signature sig = inst.popN(to!size_t(count), members);
                 if(sig.all!"a == ElementType.number") {
-                    push(members.map!(e => to!dchar(e.value.num).text).array.join(""));
+                    inst.push(members.map!(e => to!dchar(e.value.num).text).array.join(""));
                 }
             }
             else if(top.type == ElementType.string) {
-                push(top);
+                inst.push(top);
             }
             else if(top.type == ElementType.array) {
                 Element[] arr = top.value.arr;
-                push(arr.map!(e => e.toString()).array.join(", "));
+                inst.push(arr.map!(e => e.toString()).array.join(", "));
             }
         };
-        ops['+'] = delegate void(Tir inst) {
+        base.ops['+'] = delegate void(Tir inst) {
             Element[] els;
             signature sig;
             if(inst.matchSignature(Element.oneArray, sig, els)) {
                 Element[] a;
-                assignSignature(sig, els, &a);
+                inst.assignSignature(sig, els, &a);
                 inst.push(a);
                 inst.runAsChild("⤚+");
             }
             else if(inst.matchSignature(Element.twoNumbers, sig, els)) {
                 BigInt a, b;
-                assignSignature(sig, els, &a, &b);
+                inst.assignSignature(sig, els, &a, &b);
                 inst.push(a + b);
             }
             else if(inst.matchSignature(Element.twoStrings, sig, els)) {
                 string s, t;
-                assignSignature(sig, els, &s, &t);
+                inst.assignSignature(sig, els, &s, &t);
                 inst.push(s ~ t);
             }
             else if(inst.matchSignature(Element.anyOne, sig, els)) {
                 TirTypeError.raise("Add (+)", els);
             }
         };
+        // debug stack
+        base.ops['⧌'] = delegate void(Tir inst) {
+            inst.debugStack;
+        };
         // subtract
-        ops['−'] = ops['-'] = delegate void(Tir inst) {
+        base.ops['−'] = base.ops['-'] = delegate void(Tir inst) {
             Element[] els;
             signature sig;
             assert(inst.matchSignature(Element.twoNumbers, sig, els));
             BigInt a, b;
-            assignSignature(sig, els, &a, &b);
+            inst.assignSignature(sig, els, &a, &b);
             inst.push(a - b);
         };
         // modulus
-        ops['%'] = delegate void(Tir inst) {
+        base.ops['%'] = delegate void(Tir inst) {
             Element[] els;
             signature sig;
             assert(inst.matchSignature(Element.twoNumbers, sig, els));
             BigInt a, b;
-            assignSignature(sig, els, &a, &b);
+            inst.assignSignature(sig, els, &a, &b);
             inst.push(a % b);
         };
     }
