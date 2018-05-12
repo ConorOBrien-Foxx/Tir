@@ -12,6 +12,7 @@ import std.functional;
 import std.range;
 import std.stdio;
 import std.string;
+import std.typecons;
 import std.utf;
 import core.vararg;
 
@@ -233,7 +234,7 @@ union ElementValue {
 class Element {
     ElementValue value;
     ElementType type;
-    string repr;
+    string funcRepr;
 
     this(voidTir fun, string repr) {
         update(fun, repr);
@@ -246,6 +247,16 @@ class Element {
     }
     this(T)(T el) {
         update(el);
+    }
+    this(T, S)(T t, S s) {
+        update(t, s);
+    }
+
+    static Element opCall(T)(T el) {
+        return new Element(el);
+    }
+    static Element opCall(T, S)(T t, S s) {
+        return new Element(t, s);
     }
 
     void update(string str) {
@@ -270,7 +281,7 @@ class Element {
     void update(voidTir fun, string repr) {
         type = ElementType.func;
         value.fun = fun;
-        this.repr = repr;
+        funcRepr = repr;
     }
 
     bool truthy() {
@@ -302,7 +313,25 @@ class Element {
             case ElementType.rational:
                 return to!string(value.rat);
             case ElementType.func:
-                return repr;
+                return funcRepr;
+
+            default:
+                assert(0);
+        }
+    }
+
+    string repr() {
+        switch(type) {
+            case ElementType.array:
+                return "[" ~ value.arr.map!("a.repr").join(", ") ~ "]";
+            case ElementType.string:
+                return "«" ~ value.str ~ "»";
+            case ElementType.number:
+                return to!string(value.num);
+            case ElementType.rational:
+                return to!string(value.rat);
+            case ElementType.func:
+                return funcRepr;
 
             default:
                 assert(0);
@@ -355,6 +384,26 @@ voidTir unary(Element delegate(Tir, Element) fn) {
     };
 }
 
+alias multiElement = Element delegate(Tir, signature, Element[]);
+alias matcher = Tuple!(signature, "match", multiElement, "fn");
+
+voidTir caseFunction(string name, matcher[] cases) {
+    return delegate void(Tir inst) {
+        Element[] els;
+        signature sig;
+        foreach(m; cases) {
+            if(inst.matchSignature(m.match, sig, els)) {
+                Element res = m.fn(inst, sig, els);
+                inst.push(res);
+                return;
+            }
+        }
+
+        assert(inst.matchSignature(Element.anyOne, sig, els));
+        TirTypeError.raise("Add (+)", els);
+    };
+}
+
 class Tir {
     Element[] stack = [];
     Token[] tokens;
@@ -403,9 +452,12 @@ class Tir {
     void push(bool el) {
         push(el ? 1 : 0);
     }
-    void push2(T, S)(T a, S b) {
-        push(a);
-        push(b);
+    void push(BigInt el) {
+        stack ~= new Element(el);
+    }
+    void pushMulti(Element[] args...) {
+        foreach(el; args)
+            push(el);
     }
 
     signature signatureof(T...)(T args) {
@@ -511,12 +563,13 @@ class Tir {
         callOp(ops[c], outStack, args);
     }
 
-    void push(BigInt el) {
-        stack ~= new Element(el);
-    }
-
     void advance() {
         ip++;
+    }
+
+    void runAsChild(T)(T input, Element[] args...) {
+        pushMulti(args);
+        runAsChild(input);
     }
 
     void runAsChild(Token[] tokens) {
@@ -572,7 +625,7 @@ class Tir {
     void debugStack() {
         writeln("== stack debug ==");
         foreach(i, el; stack.enumerate) {
-            writefln("stack[%s] = %s", i, el);
+            writefln("stack[%s] = %s", i, el.repr);
         }
     }
 
@@ -676,13 +729,15 @@ class Tir {
         }
     }
 
+    void setVar(dchar key, Element[] els) {
+        vars[key] = new Element(els);
+    }
     void setVar(T)(dchar key, T el) {
         vars[key] = new Element(el);
     }
 
     void aliasFunc(dchar id, string code) {
         Token[] tokens = code.tokenize(meta.keys);
-
         ops[id] = delegate void(Tir inst) {
             inst.runAsChild(tokens);
         };
@@ -693,11 +748,10 @@ class Tir {
         base.setVar('S', " ");
         base.setVar('T', "\t");
         base.setVar('N', "\n");
+        base.setVar('A', []);
     }
 
     static void assignOps(Tir base) {
-        base.aliasFunc('⨊', "#{2%}+");
-        base.aliasFunc('∄', "∃");
         // call/negate
         base.ops['~'] = delegate void(Tir inst) {
             Element[] els;
@@ -713,6 +767,21 @@ class Tir {
                 inst.push(-a);
             }
         };
+        base.ops['&'] = caseFunction("& (concat)", [
+            matcher(Element.anyTwo, delegate Element(Tir inst, signature sig, Element[] args) {
+                Element[][] multiArray = args.map!(delegate Element[](Element el) {
+                    if(el.type == ElementType.array)
+                        return el.value.arr;
+                    else
+                        return [el];
+                }).array;
+                return Element(join(multiArray));
+            })
+        ]);
+        // string representation
+        base.ops['℘'] = unary(delegate Element(Tir inst, Element el) {
+            return Element(el.repr);
+        });
         // range
         base.ops['r'] = delegate void(Tir inst) {
             Element[] els;
@@ -1061,7 +1130,7 @@ class Tir {
         /* base.meta['⇷'] = delegate void(Tir inst) {
             writeln("metaa");
         }; */
-        // to string
+        // string collection
         base.ops['s'] = delegate void(Tir inst) {
             Element top = inst.pop;
             if(top.type == ElementType.number) {
@@ -1080,29 +1149,22 @@ class Tir {
                 inst.push(arr.map!(e => e.toString()).array.join(", "));
             }
         };
-        base.ops['+'] = delegate void(Tir inst) {
-            Element[] els;
-            signature sig;
-            if(inst.matchSignature(Element.oneArray, sig, els)) {
-                Element[] a;
-                inst.assignSignature(sig, els, &a);
-                inst.push(a);
-                inst.runAsChild("⤚+");
-            }
-            else if(inst.matchSignature(Element.twoNumbers, sig, els)) {
+        base.ops['+'] = caseFunction("Add (+)", [
+            matcher(Element.oneArray, delegate Element(Tir inst, signature sig, Element[] args) {
+                inst.runAsChild("⤚+", args);
+                return null;
+            }),
+            matcher(Element.twoNumbers, delegate Element(Tir inst, signature sig, Element[] args) {
                 BigInt a, b;
-                inst.assignSignature(sig, els, &a, &b);
-                inst.push(a + b);
-            }
-            else if(inst.matchSignature(Element.twoStrings, sig, els)) {
+                inst.assignSignature(sig, args, &a, &b);
+                return Element(a + b);
+            }),
+            matcher(Element.twoStrings, delegate Element(Tir inst, signature sig, Element[] args) {
                 string s, t;
-                inst.assignSignature(sig, els, &s, &t);
-                inst.push(s ~ t);
-            }
-            else if(inst.matchSignature(Element.anyOne, sig, els)) {
-                TirTypeError.raise("Add (+)", els);
-            }
-        };
+                inst.assignSignature(sig, args, &s, &t);
+                return Element(s ~ t);
+            })
+        ]);
         // debug stack
         base.ops['⧌'] = delegate void(Tir inst) {
             inst.debugStack;
@@ -1125,6 +1187,11 @@ class Tir {
             inst.assignSignature(sig, els, &a, &b);
             inst.push(a % b);
         };
+
+        // ALIASES
+        base.aliasFunc('⨊', "#{2%}+");
+        base.aliasFunc('∄', "∃¬");
+        base.aliasFunc('⅋', "⇔&");
     }
 }
 
