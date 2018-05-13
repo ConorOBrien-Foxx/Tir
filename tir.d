@@ -17,6 +17,15 @@ import std.typecons;
 import std.utf;
 import core.vararg;
 
+string readBytes(string fileName) {
+    return to!string(fileName.read);
+}
+
+string asCapitalized(string s) {
+    if(s.length <= 1) return s.toUpper;
+    return s[0..1].toUpper ~ s[1..$].toLower;
+}
+
 class TirTypeError : Exception {
     this(string msg, string file = __FILE__, size_t line = __LINE__) {
         super(msg, file, line);
@@ -37,8 +46,11 @@ class IndexingError : Exception {
     }
 }
 
-void times(size_t n, lazy void exp) {
-    for(size_t i = 0; i < n; i++) exp();
+void times(size_t n, void delegate() fn) {
+    for(size_t i = 0; i < n; i++) fn();
+}
+void times(BigInt n, void delegate() fn) {
+    for(BigInt i = 0; i < n; i++) fn();
 }
 
 string[] mapstring(T)(T arr) {
@@ -207,10 +219,10 @@ class Tokenizer {
         else if(cur >= '①' && cur <= '⑳') {
             int rep = cur - '①' + 2;
             next.type = TokenType.quote_n;
-            rep.times((
-                next.raw ~= cur,
-                advance
-            ));
+            rep.times(delegate void() {
+                next.raw ~= cur;
+                advance;
+            });
         }
         else {
             next.type = TokenType.command;
@@ -409,6 +421,7 @@ voidTir caseFunction(string name, matcher[] cases) {
     return delegate void(Tir inst) {
         Element[] els;
         signature sig;
+
         foreach(m; cases) {
             if(inst.matchSignature(m.match, sig, els)) {
                 Element res = m.fn(inst, sig, els);
@@ -418,8 +431,37 @@ voidTir caseFunction(string name, matcher[] cases) {
         }
 
         assert(inst.matchSignature(Element.anyOne, sig, els));
-        TirTypeError.raise("Add (+)", els);
+        TirTypeError.raise(name, els);
     };
+}
+
+class Consumer(T) {
+    size_t pos = 0;
+    T[] possible;
+    T otherwise;
+
+    this(T o) {
+        otherwise = o;
+    }
+    this(T[] p) {
+        possible = p;
+    }
+    this(T[] p, T o) {
+        otherwise = o;
+        possible = p;
+    }
+
+    void append(T el) {
+        possible ~= el;
+    }
+
+    T consume() {
+        /* writeln("Consuming @ ", pos, ";", possible.length, ";", otherwise); */
+        if(pos < possible.length)
+            return possible[pos++];
+        else
+            return otherwise;
+    }
 }
 
 class Tir {
@@ -429,6 +471,7 @@ class Tir {
     voidTir[dchar] ops;
     metaTir[dchar] meta;
     Element[dchar] vars;
+    Consumer!Element arguments;
 
     // actions
     signatureAction beforeCall = null;
@@ -454,7 +497,8 @@ class Tir {
             return stack.pop;
         }
         else {
-            return new Element(BigInt("0"));
+            return arguments.consume;
+            /* return new Element(BigInt("0")); */
         }
     }
     void push(Element el) {
@@ -491,10 +535,31 @@ class Tir {
     signature popN(size_t n, out Element[] els) {
         els = [];
         els.length = n;
+        size_t offset = 0;
+        bool unset = true;
         for(size_t i = n - 1; i < n; --i) {
-            els[i] = pop;
+            if(stack.length) {
+                els[i] = pop;
+            }
+            else {
+                if(unset) {
+                    offset = i;
+                    unset = false;
+                }
+                els[offset - i] = pop;
+            }
         }
         return signatureof(els);
+    }
+    Element[] popN(size_t n) {
+        Element[] res;
+        popN(n, res);
+        return res;
+    }
+
+    void needs(size_t n) {
+        auto test = popN(n);
+        pushMulti(test);
     }
 
     signature peekN(size_t n, out Element[] els) {
@@ -513,6 +578,7 @@ class Tir {
 
     bool matchSignature(signature search, out signature result, out Element[] els) {
         size_t n = search.length;
+        needs(n);
         Element[] e;
         signature sig;
         try {
@@ -567,6 +633,7 @@ class Tir {
         meta = inst.meta;
         stack = inst.stack;
         vars = inst.vars;
+        arguments = inst.arguments;
     }
 
     void callOp(voidTir fn, ref Element[] outStack, Element[] args...) {
@@ -775,20 +842,19 @@ class Tir {
 
     static void assignOps(Tir base) {
         // call/negate
-        base.ops['~'] = delegate void(Tir inst) {
-            Element[] els;
-            signature sig;
-            if(inst.matchSignature(Element.oneFunc, sig, els)) {
+        base.ops['~'] = caseFunction("~ (Negate)", [
+            matcher(Element.oneFunc, delegate Element(Tir inst, signature sig, Element[] args) {
                 voidTir fn;
-                inst.assignSignature(sig, els, &fn);
+                inst.assignSignature(sig, args, &fn);
                 fn(inst);
-            }
-            else if(inst.matchSignature(Element.oneNumber, sig, els)) {
-                BigInt a;
-                inst.assignSignature(sig, els, &a);
-                inst.push(-a);
-            }
-        };
+                return null;
+            }),
+            matcher(Element.oneNumber, delegate Element(Tir inst, signature sig, Element[] args) {
+                BigInt n;
+                inst.assignSignature(sig, args, &n);
+                return Element(-n);
+            })
+        ]);
         base.ops['&'] = caseFunction("& (concat)", [
             matcher(Element.anyTwo, delegate Element(Tir inst, signature sig, Element[] args) {
                 Element[][] multiArray = args.map!(delegate Element[](Element el) {
@@ -804,10 +870,50 @@ class Tir {
         base.ops['℘'] = unary(delegate Element(Tir inst, Element el) {
             return Element(el.repr);
         });
+        // meta: capitalize
+        // 0 - uppercase
+        // 1 - lowercase
+        // 2 - swapcase
+        // 3 - asCapitalized
+        // 4 - title case
+        base.meta['c'] = delegate voidTir(Tir inst, string source, voidTir fn) {
+            return caseFunction(source ~ " (MetaCapitalize)", [
+                matcher(Element.oneString, delegate Element(Tir inst, signature sig, Element[] args) {
+                    string s;
+                    inst.assignSignature(sig, args, &s);
+
+                    Element[] temp;
+                    inst.callOp(fn, temp, args[0]);
+                    Element res = temp.pop;
+                    assert(res.type == ElementType.number);
+                    int type = to!int(res.value.num);
+
+                    switch(type) {
+                        case 0:
+                            return Element(s.toUpper);
+                            break;
+                        case 1:
+                            return Element(s.toLower);
+                            break;
+                        case 2:
+                            goto default;
+
+                        case 3:
+                            return Element(s.asCapitalized);
+                            break;
+
+                        default:
+                            stderr.writeln("Unsupported method to `c`: ", type);
+                    }
+                    return Element(0);
+                })
+            ]);
+        };
         // range
         base.ops['r'] = delegate void(Tir inst) {
             Element[] els;
             signature sig;
+
             if(inst.matchSignature(Element.twoNumbers, sig, els)) {
                 BigInt a, b;
                 inst.assignSignature(sig, els, &a, &b);
@@ -816,6 +922,9 @@ class Tir {
                     res ~= new Element(i);
                 }
                 inst.push(res);
+            }
+            else {
+                writeln("no ops");
             }
         };
         // multiplication
@@ -907,7 +1016,7 @@ class Tir {
         base.ops['⟠'] = delegate void(Tir inst) {
             Element[] els;
             signature sig;
-
+            inst.needs(2);
             if(inst.matchSignature(Element.twoStrings, sig, els)) {
                 string target, splitter;
                 inst.assignSignature(sig, els, &target, &splitter);
@@ -985,6 +1094,10 @@ class Tir {
                 BigInt den = next.value.num;
                 inst.push(Rational(num, den));
             };
+        };
+        base.ops['↔'] = delegate void(Tir inst) {
+            Element[] topTwo = inst.popN(2);
+            inst.pushMulti(topTwo.retro.array);
         };
         // collect/group stack into array
         base.ops['∎'] = delegate void(Tir inst) {
@@ -1066,9 +1179,9 @@ class Tir {
             BigInt n = top.value.num;
 
             return delegate void(Tir inst) {
-                foreach(e; n.iota) {
+                n.times(delegate void() {
                     fn(inst);
-                }
+                });
             };
         };
         // meta: reversed arguments
@@ -1217,25 +1330,73 @@ class Tir {
     }
 }
 
+class ArgumentConsumer : Consumer!Element {
+    this(string[] args) {
+        super(args.map!(delegate Element(string e) {
+            return Element(e);
+        }).array, Element(0));
+    }
+}
+
+enum Option {
+    READ_UTF,
+    ENCODE
+}
+
 void main(string[] args) {
     if(args.length < 2) {
         stderr.writeln("insufficient args given");
         return;
     }
-    string code = args[1];
+    size_t start = 1;
+    bool[Option] config;
+    config[Option.READ_UTF] = false;
+    config[Option.ENCODE] = false;
+
+    while(start < args.length && args[start][0] == '-') {
+        switch(args[start][1]) {
+            case 'u':
+                config[Option.READ_UTF] = true;
+                break;
+            case 'e':
+                config[Option.ENCODE] = true;
+                break;
+
+            default:
+                assert(0, "unhandled flag " ~ args[start]);
+        }
+        start++;
+    }
+    string code = args[start];
 
     try {
-        code = code.readText;
+        code = code.readBytes;
     }
     catch(FileException e) {
         stderr.writeln("Assuming command line argument.");
     }
 
-    /* writeln("Codepage: ", getCodepage); */
-    /* stderr.writeln("Code : ", code); */
+    if(config[Option.ENCODE]) {
+        code.encodeTir.write;
+        return;
+    }
+
+    if(config[Option.READ_UTF]) {
+        // idk
+    }
+    else {
+        code = code.decodeTir;
+    }
+
+    start++;
+
     auto inst = new Tir(code);
+    inst.arguments = new ArgumentConsumer(args[start..$]);
+
     inst.run();
     foreach(el; inst.stack) {
         writeln(el);
     }
+    /* writeln(inst.meta.keys);
+    writeln(inst.ops.keys); */
 }
