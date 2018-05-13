@@ -877,6 +877,7 @@
 # ⟖ RIGHT OUTER JOIN
 
 # ⟗ FULL OUTER JOIN
+# meta: split join
 
 # ⟘ LARGE UP TACK
 

@@ -174,9 +174,14 @@ class Tokenizer {
         else if(isMeta) {
             next.type = TokenType.meta;
             readRun(next.raw, &isMeta);
-            next.raw ~= cur;
-            if(cur != '{') {
-                advance;
+            if(hasLeft) {
+                next.raw ~= cur;
+                if(cur != '{') {
+                    advance;
+                }
+            }
+            else {
+                next.raw ~= '0';
             }
             // next.raw ~= cur;
             // advance;
@@ -835,6 +840,7 @@ class Tir {
     // uppercase values reserved for variables
     static void assignVars(Tir base) {
         base.setVar('S', " ");
+        base.setVar('E', "");
         base.setVar('T', "\t");
         base.setVar('N', "\n");
         base.setVar('A', []);
@@ -876,6 +882,8 @@ class Tir {
         // 2 - swapcase
         // 3 - asCapitalized
         // 4 - title case
+        // 5 - uppercase first character
+        // 6 - lowercase first character
         base.meta['c'] = delegate voidTir(Tir inst, string source, voidTir fn) {
             return caseFunction(source ~ " (MetaCapitalize)", [
                 matcher(Element.oneString, delegate Element(Tir inst, signature sig, Element[] args) {
@@ -891,16 +899,26 @@ class Tir {
                     switch(type) {
                         case 0:
                             return Element(s.toUpper);
-                            break;
+
                         case 1:
                             return Element(s.toLower);
-                            break;
+
                         case 2:
                             goto default;
 
                         case 3:
                             return Element(s.asCapitalized);
-                            break;
+
+                        case 4:
+                            return Element(s.split(" ").map!(asCapitalized).join(" "));
+
+                        case 5:
+                            if(s.length <= 1) return Element(s.toUpper);
+                            return Element(s[0..1].toUpper ~ s[1..$]);
+
+                        case 6:
+                            if(s.length <= 1) return Element(s.toLower);
+                            return Element(s[0..1].toLower ~ s[1..$]);
 
                         default:
                             stderr.writeln("Unsupported method to `c`: ", type);
@@ -1223,6 +1241,14 @@ class Tir {
                 }
             }
             inst.push(res);
+        };
+        // split-join
+        base.meta['⟗'] = delegate voidTir(Tir inst, string source, voidTir fn) {
+            return delegate void(Tir inst) {
+                inst.runAsChild("⟠");
+                inst.push(fn);
+                inst.runAsChild("→⨝");
+            };
         };
         // quote function
         base.meta['$'] = delegate voidTir(Tir inst, string source, voidTir mod) {
