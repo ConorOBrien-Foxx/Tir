@@ -860,11 +860,13 @@ class Tir {
 
     // uppercase values reserved for variables
     static void assignVars(Tir base) {
-        base.setVar('S', " ");
-        base.setVar('E', "");
-        base.setVar('T', "\t");
-        base.setVar('N', "\n");
         base.setVar('A', []);
+        base.setVar('B', "ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+        base.setVar('C', "abcdefghijklmnopqrstuvwxyz");
+        base.setVar('E', "");
+        base.setVar('N', "\n");
+        base.setVar('S', " ");
+        base.setVar('T', "\t");
     }
 
     static void assignOps(Tir base) {
@@ -1443,7 +1445,7 @@ int main(string[] args) {
 
     auto inst = new Tir(code);
     inst.arguments = new ArgumentConsumer(args[start..$]);
-    
+
     try {
         inst.run();
     } catch(ExitException e) {
