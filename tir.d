@@ -37,6 +37,14 @@ class IndexingError : Exception {
     }
 }
 
+void times(size_t n, lazy void exp) {
+    for(size_t i = 0; i < n; i++) exp();
+}
+
+string[] mapstring(T)(T arr) {
+    return arr.map!(to!string).array;
+}
+
 T pop(T)(ref T[] arr) {
     T last = arr[$ - 1];
     arr.length--;
@@ -47,7 +55,7 @@ void push(T)(ref T[] arr, T el) {
 }
 
 enum TokenType {
-    number, string, command, meta, func_start, func_end, set_var, set_func, whitespace, none
+    number, string, command, meta, func_start, func_end, set_var, set_func, whitespace, quote_n, none
 }
 
 string toString(TokenType type) {
@@ -194,6 +202,15 @@ class Tokenizer {
             advance;
             next.raw ~= cur;
             advance;
+        }
+        // https://www.unicode.org/charts/nameslist/n_2460.html
+        else if(cur >= '①' && cur <= '⑳') {
+            int rep = cur - '①' + 2;
+            next.type = TokenType.quote_n;
+            rep.times((
+                next.raw ~= cur,
+                advance
+            ));
         }
         else {
             next.type = TokenType.command;
@@ -700,7 +717,7 @@ class Tir {
             case TokenType.string:
                 push(
                     cur.codeform.byDchar
-                       .map!(to!string)
+                       .mapstring
                        .array[1..$-1]
                        .join
                 );
@@ -714,6 +731,10 @@ class Tir {
                 Element top = pop;
                 assert(top.type == ElementType.func);
                 ops[cur.raw[1]] = top.value.fun;
+                break;
+
+            case TokenType.quote_n:
+                push(cur.raw.byDchar.array[1..$].mapstring.join);
                 break;
 
             default:
@@ -870,13 +891,13 @@ class Tir {
             // join by empty delimiter
             if(inst.matchSignature(Element.oneArray, sig, els)) {
                 inst.assignSignature(sig, els, &arr);
-                inst.push(arr.map!(to!string).join);
+                inst.push(arr.mapstring.join);
             }
             // join by delimiter
             else if(inst.matchSignature([ElementType.array, ElementType.any], sig, els)) {
                 Element joiner;
                 inst.assignSignature(sig, els, &arr, &joiner);
-                inst.push(arr.map!(to!string).join(to!string(joiner)));
+                inst.push(arr.mapstring.join(to!string(joiner)));
             }
             else if(inst.matchSignature(Element.anyOne, sig, els)) {
                 TirTypeError.raise("Join (⨝)", els);
