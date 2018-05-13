@@ -1,0 +1,5 @@
+⟗c5
+
+⫽ arguments: a, b
+⫽ ⟗           split a on occurrences of b, then join them
+⫽   c5         capitalize the first character of each occurrence

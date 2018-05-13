@@ -26,6 +26,16 @@ string asCapitalized(string s) {
     return s[0..1].toUpper ~ s[1..$].toLower;
 }
 
+// https://stackoverflow.com/a/33055496/4119004
+class ExitException : Exception {
+    int returnCode;
+
+    @safe pure nothrow this(int returnCode, string file = __FILE__, size_t line = __LINE__) {
+        super(null, file, line);
+        this.returnCode = returnCode;
+    }
+}
+
 class TirTypeError : Exception {
     this(string msg, string file = __FILE__, size_t line = __LINE__) {
         super(msg, file, line);
@@ -67,7 +77,8 @@ void push(T)(ref T[] arr, T el) {
 }
 
 enum TokenType {
-    number, string, command, meta, func_start, func_end, set_var, set_func, whitespace, quote_n, none
+    number, string, command, meta, func_start, func_end, set_var, set_func,
+    whitespace, quote_n, comment, none
 }
 
 string toString(TokenType type) {
@@ -228,6 +239,13 @@ class Tokenizer {
                 next.raw ~= cur;
                 advance;
             });
+        }
+        else if(cur == '⫽') {
+            next.type = TokenType.comment;
+            while(hasLeft && cur != '\n') {
+                next.raw ~= cur;
+                advance;
+            }
         }
         else {
             next.type = TokenType.command;
@@ -809,6 +827,9 @@ class Tir {
                 push(cur.raw.byDchar.array[1..$].mapstring.join);
                 break;
 
+            case TokenType.comment:
+                break;
+
             default:
                 stderr.writefln("Unhandled type %s", cur.type);
                 assert(0);
@@ -872,6 +893,10 @@ class Tir {
                 return Element(join(multiArray));
             })
         ]);
+        // exit
+        base.ops['.'] = delegate void(Tir inst) {
+            throw new ExitException(0);
+        };
         // string representation
         base.ops['℘'] = unary(delegate Element(Tir inst, Element el) {
             return Element(el.repr);
@@ -1369,10 +1394,10 @@ enum Option {
     ENCODE
 }
 
-void main(string[] args) {
+int main(string[] args) {
     if(args.length < 2) {
         stderr.writeln("insufficient args given");
-        return;
+        return -1;
     }
     size_t start = 1;
     bool[Option] config;
@@ -1404,7 +1429,7 @@ void main(string[] args) {
 
     if(config[Option.ENCODE]) {
         code.encodeTir.write;
-        return;
+        return 0;
     }
 
     if(config[Option.READ_UTF]) {
@@ -1418,11 +1443,17 @@ void main(string[] args) {
 
     auto inst = new Tir(code);
     inst.arguments = new ArgumentConsumer(args[start..$]);
+    
+    try {
+        inst.run();
+    } catch(ExitException e) {
+        return e.returnCode;
+    }
 
-    inst.run();
     foreach(el; inst.stack) {
         writeln(el);
     }
+    return 0;
     /* writeln(inst.meta.keys);
     writeln(inst.ops.keys); */
 }
