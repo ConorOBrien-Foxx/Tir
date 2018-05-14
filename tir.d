@@ -444,6 +444,10 @@ class Element {
         }
     }
 
+    Element[] toArray() {
+        return castTo(ElementType.array).value.arr;
+    }
+
     static signature oneFunc = [ElementType.func];
     static signature oneRational = [ElementType.rational];
     static signature oneArray = [ElementType.array];
@@ -491,6 +495,14 @@ voidTir unary(Element delegate(Tir, Element) fn) {
         assert(inst.matchSignature(Element.anyOne, sig, els));
         inst.push(fn(inst, els[0]));
     };
+}
+
+voidTir binary(string name, Element delegate(Tir, signature, Element, Element) fn) {
+    return caseFunction(name, [
+        matcher(Element.anyTwo, delegate Element(Tir inst, signature sig, Element[] args) {
+            return fn(inst, sig, args[0], args[1]);
+        })
+    ]);
 }
 
 alias multiElement = Element delegate(Tir, signature, Element[]);
@@ -561,6 +573,7 @@ T[] rotate(T, K)(T[] arr, K n = 1) {
 }
 
 class Tir {
+    static string preamble = "Ao:CBo:D";
     Element[] stack = [];
     Token[] tokens;
     size_t ip = 0;
@@ -577,6 +590,7 @@ class Tir {
         Tir.assignOps(this);
         Tir.assignVars(this);
         checkCodepage;
+        runAsChild(preamble);
         tokens = code.tokenize(meta.keys);
     }
 
@@ -719,7 +733,7 @@ class Tir {
             }
             else if(type == typeid(Element[]*)) {
                 Element[]* a = va_arg!(Element[]*)(_argptr);
-                *a = els[i].castTo(ElementType.array).value.arr;
+                *a = els[i].toArray;
             }
             else if(type == typeid(voidTir*)) {
                 voidTir* f = va_arg!(voidTir*)(_argptr);
@@ -749,6 +763,12 @@ class Tir {
 
     void callOp(dchar c, ref Element[] outStack, Element[] args...) {
         callOp(ops[c], outStack, args);
+    }
+
+    Element callOp(T)(T fn, Element[] args...) {
+        Element[] temp;
+        callOp(fn, temp, args);
+        return temp.pop;
     }
 
     void advance() {
@@ -1136,6 +1156,12 @@ class Tir {
             writeln(els[0]);
             inst.push(els[0]);
         };
+        // ords
+        base.ops['o'] = caseFunction("o (OrdinalOf)", [
+            matcher(Element.oneString, delegate Element(Tir inst, signature sig, Element[] args) {
+                return Element(args[0].toArray.map!(a => Element(to!int(a.toString[0]))).array);
+            })
+        ]);
         // convert to function
         base.ops['⨐'] = delegate void(Tir inst) {
             Element[] els;
@@ -1188,6 +1214,14 @@ class Tir {
         base.ops['¬'] = unary(delegate Element(Tir inst, Element el) {
             return new Element(!el.truthy);
         });
+        // grid/ungrid
+        base.ops['g'] = caseFunction("g (GridUnGrid)", [
+            matcher(Element.oneArray, delegate Element(Tir inst, signature sig, Element[] args) {
+                inst.push(args[0]);
+                inst.runAsChild("#⨝N⨝");
+                return null;
+            })
+        ]);
         // assign to G
         base.ops['⅁'] = unary(delegate Element(Tir inst, Element el) {
             inst.vars['G'] = el;
@@ -1364,6 +1398,51 @@ class Tir {
                 }
             }
             inst.push(res);
+        };
+        // stack: duplicate TOS
+        base.ops['⤇'] = delegate void(Tir inst) {
+            Element top = inst.pop;
+            inst.push(top);
+            inst.push(top);
+        };
+        // stack: pop TOS
+        base.ops['⤆'] = delegate void(Tir inst) {
+            inst.pop;
+        };
+        // meta: 2d cross product/pairwise
+        base.meta['⨯'] = delegate voidTir(Tir inst, string source, voidTir fn) {
+            return binary("⨯ (CrossProduct)", delegate Element(Tir inst, signature sig, Element av, Element bv) {
+                Element[] as, bs;
+                as = av.castTo(ElementType.array).toArray;
+                bs = bv.castTo(ElementType.array).toArray;
+                Element[] res;
+                Element[] row;
+                foreach(a; as) {
+                    row = [];
+                    foreach(b; bs) {
+                        row ~= inst.callOp(fn, a, b);
+                    }
+                    res ~= Element(row);
+                }
+                return Element(res);
+            });
+        };
+        // unary cross product
+        base.meta['⋆'] = delegate voidTir(Tir inst, string source, voidTir fn) {
+            return unary(delegate Element(Tir inst, Element av) {
+                Element[] as;
+                as = av.castTo(ElementType.array).toArray;
+                Element[] res;
+                Element[] row;
+                foreach(x; as) {
+                    row = [];
+                    foreach(y; as) {
+                        row ~= inst.callOp(fn, x, y);
+                    }
+                    res ~= Element(row);
+                }
+                return Element(res);
+            });
         };
         // any are truthy
         base.ops['∃'] = delegate void(Tir inst) {
