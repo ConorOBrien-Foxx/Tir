@@ -2,9 +2,11 @@ import rational;
 import codepage;
 
 import std.ascii;
+import std.algorithm.comparison;
 import std.algorithm.iteration;
 import std.algorithm.mutation;
 import std.algorithm.searching;
+import std.algorithm.setops;
 import std.array;
 import std.bigint;
 import std.conv;
@@ -19,6 +21,16 @@ import core.vararg;
 
 string readBytes(string fileName) {
     return to!string(fileName.read);
+}
+
+T[] digits(T)(T n) {
+    T[] res;
+    if(n == 0) res ~= cast(T)(0);
+    while(n != 0) {
+        res = n % cast(T)(10) ~ res;
+        n /= cast(T)(10);
+    }
+    return res;
 }
 
 string asCapitalized(string s) {
@@ -56,8 +68,8 @@ class IndexingError : Exception {
     }
 }
 
-void times(size_t n, void delegate() fn) {
-    for(size_t i = 0; i < n; i++) fn();
+void times(T)(T n, void delegate() fn) {
+    for(T i = 0; i < n; i++) fn();
 }
 void times(BigInt n, void delegate() fn) {
     for(BigInt i = 0; i < n; i++) fn();
@@ -275,7 +287,8 @@ Token[] tokenize(string str, dchar[] metas) {
 }
 
 enum ElementType {
-    number, string, array, func, rational, any
+    number, string, array, func, rational, any,
+    arrayLike
 }
 union ElementValue {
     BigInt num;
@@ -312,6 +325,11 @@ class Element {
         return new Element(t, s);
     }
 
+    void update(Element el) {
+        type = el.type;
+        value = el.value;
+        funcRepr = el.funcRepr;
+    }
     void update(string str) {
         type = ElementType.string;
         value.str = str;
@@ -391,6 +409,41 @@ class Element {
         }
     }
 
+    Element castTo(ElementType castType) {
+        if(castType == type) return Element(this);
+
+        switch(castType) {
+            // to a string
+            case ElementType.string:
+                switch(type) {
+                    case ElementType.number, ElementType.rational, ElementType.func:
+                        return Element(toString);
+
+                    case ElementType.array:
+                        return Element(value.arr.map!(to!string).join);
+
+                    default:
+                        assert(0, "undefined cast from " ~ to!string(type) ~ " to " ~ to!string(castType) ~ "!");
+                }
+
+            // to an array
+            case ElementType.array:
+                switch(type) {
+                    case ElementType.string:
+                        return Element(value.str.byDchar.map!(a => Element(to!string(a))).array);
+
+                    case ElementType.number:
+                        return Element(value.num.digits.map!(a => Element(a)).array);
+
+                    default:
+                        assert(0, "undefined cast from " ~ to!string(type) ~ " to " ~ to!string(castType) ~ "!");
+                }
+
+            default:
+                assert(0, "no cast types are defined for class " ~ to!string(type) ~ "!");
+        }
+    }
+
     static signature oneFunc = [ElementType.func];
     static signature oneRational = [ElementType.rational];
     static signature oneArray = [ElementType.array];
@@ -419,6 +472,9 @@ bool signatureEqual(signature as, signature bs) {
 
     foreach(a, b; lockstep(as, bs)) {
         if(a != ElementType.any && b != ElementType.any) {
+            if(b == ElementType.arrayLike && a.among!(ElementType.string, ElementType.array)) {
+                continue;
+            }
             if(a != b) {
                 return false;
             }
@@ -487,6 +543,23 @@ class Consumer(T) {
     }
 }
 
+T[] rotateLeft(T, K)(T[] arr, K n = 1) {
+    n.times(delegate void() {
+        arr = arr[$-1] ~ arr[0..$-1];
+    });
+    return arr;
+}
+T[] rotateRight(T, K)(T[] arr, K n = 1) {
+    n.times(delegate void() {
+        arr = arr[1..$] ~ arr[0];
+    });
+    return arr;
+}
+T[] rotate(T, K)(T[] arr, K n = 1) {
+    if(n < 0) return rotateRight(arr, -n);
+    else      return rotateLeft(arr, n);
+}
+
 class Tir {
     Element[] stack = [];
     Token[] tokens;
@@ -503,6 +576,7 @@ class Tir {
     this(string code) {
         Tir.assignOps(this);
         Tir.assignVars(this);
+        checkCodepage;
         tokens = code.tokenize(meta.keys);
     }
 
@@ -513,6 +587,12 @@ class Tir {
     this(Token[] code, Tir inst) {
         this(code);
         inherit(inst);
+    }
+
+    void checkCodepage() {
+        auto combined = ops.keys ~ meta.keys;
+        auto diff = combined.filter!(a => !tirCodepage.canFind(a));
+        assert(diff.array.length == 0, diff.mapstring.join ~ " <-- you forgot those");
     }
 
     Element pop() {
@@ -639,7 +719,7 @@ class Tir {
             }
             else if(type == typeid(Element[]*)) {
                 Element[]* a = va_arg!(Element[]*)(_argptr);
-                *a = els[i].value.arr;
+                *a = els[i].castTo(ElementType.array).value.arr;
             }
             else if(type == typeid(voidTir*)) {
                 voidTir* f = va_arg!(voidTir*)(_argptr);
@@ -860,16 +940,24 @@ class Tir {
 
     // uppercase values reserved for variables
     static void assignVars(Tir base) {
-        base.setVar('A', []);
-        base.setVar('B', "ABCDEFGHIJKLMNOPQRSTUVWXYZ");
-        base.setVar('C', "abcdefghijklmnopqrstuvwxyz");
+        base.setVar('A', "ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+        base.setVar('B', "abcdefghijklmnopqrstuvwxyz");
         base.setVar('E', "");
         base.setVar('N', "\n");
         base.setVar('S', " ");
         base.setVar('T', "\t");
+        base.setVar('Y', []);
     }
 
     static void assignOps(Tir base) {
+        // type cast
+        base.ops['t'] = caseFunction("t (TypeCast)", [
+            matcher(Element.anyTwo, delegate Element(Tir inst, signature sig, Element[] args) {
+                Element first, like;
+                inst.assignSignature(sig, args, &first, &like);
+                return first.castTo(like.type);
+            })
+        ]);
         // call/negate
         base.ops['~'] = caseFunction("~ (Negate)", [
             matcher(Element.oneFunc, delegate Element(Tir inst, signature sig, Element[] args) {
@@ -884,7 +972,7 @@ class Tir {
                 return Element(-n);
             })
         ]);
-        base.ops['&'] = caseFunction("& (concat)", [
+        base.ops['&'] = caseFunction("& (Concat)", [
             matcher(Element.anyTwo, delegate Element(Tir inst, signature sig, Element[] args) {
                 Element[][] multiArray = args.map!(delegate Element[](Element el) {
                     if(el.type == ElementType.array)
@@ -903,6 +991,21 @@ class Tir {
         base.ops['℘'] = unary(delegate Element(Tir inst, Element el) {
             return Element(el.repr);
         });
+        // rotate right N times
+        base.ops['⤏'] = caseFunction("⤏ (RotateLeft)", [
+            matcher([ElementType.arrayLike, ElementType.number], delegate Element(Tir inst, signature sig, Element[] args) {
+                Element[] arr;
+                BigInt n;
+                inst.assignSignature(sig, args, &arr, &n);
+                return Element(arr.rotate(n)).castTo(args[0].type);
+            })
+        ]);
+        // rotate left N times
+        base.aliasFunc('⤎', "~⤏");
+        // rotate right once
+        base.aliasFunc('⤍', "1⤏");
+        // rotate left once
+        base.aliasFunc('⤌', "1⤎");
         // meta: capitalize
         // 0 - uppercase
         // 1 - lowercase
@@ -1024,6 +1127,14 @@ class Tir {
             signature sig;
             assert(inst.matchSignature(Element.anyOne, sig, els));
             writeln(els[0]);
+        };
+        // print without popping
+        base.ops['⟁'] = delegate void(Tir inst) {
+            Element[] els;
+            signature sig;
+            assert(inst.matchSignature(Element.anyOne, sig, els));
+            writeln(els[0]);
+            inst.push(els[0]);
         };
         // convert to function
         base.ops['⨐'] = delegate void(Tir inst) {
@@ -1286,8 +1397,7 @@ class Tir {
         // thread
         base.meta['#'] = delegate voidTir(Tir inst, string source, voidTir mod) {
             return delegate void(Tir inst) {
-                Element top = inst.pop;
-                assert(top.type == ElementType.array);
+                Element top = inst.pop.castTo(ElementType.array);
                 Element[] data = top.value.arr;
                 Element[] tempStack;
                 inst.push(data.map!(delegate Element(Element el) {
