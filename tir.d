@@ -33,6 +33,18 @@ T[] digits(T)(T n) {
     return res;
 }
 
+T[] range(T)(T min, T max) {
+    T[] res;
+    for(T i = min; i <= max; i++) {
+        res ~= i;
+    }
+    return res;
+}
+
+T[] range(T)(T max) {
+    return BigInt(0).range(max - 1);
+}
+
 string asCapitalized(string s) {
     if(s.length <= 1) return s.toUpper;
     return s[0..1].toUpper ~ s[1..$].toLower;
@@ -89,7 +101,7 @@ void push(T)(ref T[] arr, T el) {
 }
 
 enum TokenType {
-    number, string, command, meta, func_start, func_end, set_var, set_func,
+    number, string, implicitString, command, meta, func_start, func_end, set_var, set_func,
     whitespace, quote_n, comment, none
 }
 
@@ -186,7 +198,15 @@ class Tokenizer {
     void step() {
         Token next = new Token();
         next.start = ptr;
-        if(cur.isDigit) {
+        int implicitIndex = code.indexOf('⦀', ptr);
+        if(implicitIndex != -1) {
+            next.type = TokenType.implicitString;
+            while(ptr <= implicitIndex) {
+                next.raw ~= cur;
+                advance;
+            }
+        }
+        else if(cur.isDigit) {
             next.type = TokenType.number;
             readRun(next.raw, (&isDigit).toDelegate());
         }
@@ -297,6 +317,7 @@ union ElementValue {
     voidTir fun;
     Rational rat;
 }
+
 class Element {
     ElementValue value;
     ElementType type;
@@ -433,7 +454,7 @@ class Element {
                         return Element(value.str.byDchar.map!(a => Element(to!string(a))).array);
 
                     case ElementType.number:
-                        return Element(value.num.digits.map!(a => Element(a)).array);
+                        return Element(value.num.digits.map!(Element).array);
 
                     default:
                         assert(0, "undefined cast from " ~ to!string(type) ~ " to " ~ to!string(castType) ~ "!");
@@ -872,7 +893,12 @@ class Tir {
                 /* writeln("keys ", keys);
                 writefln("Meta of %s under %s", target, keys); */
                 voidTir fn;
-                if(target in ops) {
+                if(target == '.') {
+                    Element top = pop;
+                    assert(top.type == ElementType.func);
+                    fn = top.value.fun;
+                }
+                else if(target in ops) {
                     fn = ops[target];
                 }
                 else if(target.isDigit) {
@@ -909,6 +935,15 @@ class Tir {
                     cur.codeform.byDchar
                        .mapstring
                        .array[1..$-1]
+                       .join
+                );
+                break;
+
+            case TokenType.implicitString:
+                push(
+                    cur.codeform.byDchar
+                       .mapstring
+                       .array[0..$-1]
                        .join
                 );
                 break;
@@ -970,6 +1005,14 @@ class Tir {
     }
 
     static void assignOps(Tir base) {
+        // iota
+        base.ops['ι'] = caseFunction("ι (Iota)", [
+            matcher(Element.oneNumber, delegate Element(Tir inst, signature sig, Element[] args) {
+                BigInt a;
+                inst.assignSignature(sig, args, &a);
+                return Element(a.range.map!(Element).array);
+            })
+        ]);
         // type cast
         base.ops['t'] = caseFunction("t (TypeCast)", [
             matcher(Element.anyTwo, delegate Element(Tir inst, signature sig, Element[] args) {
