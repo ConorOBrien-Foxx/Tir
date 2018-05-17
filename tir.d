@@ -1248,6 +1248,12 @@ class Tir {
                 string[] sections = target.split(splitter);
                 inst.push(sections.map!(e => new Element(e)).array);
             }
+            else if(inst.matchSignature(Element.oneString, sig, els)) {
+                string target;
+                inst.assignSignature(sig, els, &target);
+                string[] sections = target.split("");
+                inst.push(sections.map!(e => new Element(e)).array);
+            }
             else if(inst.matchSignature(Element.anyOne, sig, els)) {
                 TirTypeError.raise("Split (⟠)", els);
             }
