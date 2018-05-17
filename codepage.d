@@ -19,7 +19,7 @@ dchar[] tirCodepage() {
     "pqrstuvwxyz{|}~¬",
     "×",
     "①②③⟗⤏⤌⤍⤎⟁⨯",
-    "⤆⤇⋆ι⦀",
+    "⤆⤇⋆ι⦀⦾⧊",
     ].join.byDchar.array;
     assert(_codepage.length < 256, "too many characters for a SBCS");
     return _codepage;

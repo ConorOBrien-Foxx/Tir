@@ -60,17 +60,33 @@ class ExitException : Exception {
     }
 }
 
-class TirTypeError : Exception {
+class TirError : Exception {
     this(string msg, string file = __FILE__, size_t line = __LINE__) {
         super(msg, file, line);
     }
 
-    static void raise(string name, Element[] els) {
+    static void raise(Tir inst, string message) {
+        throw new TirTypeError(
+            "[" ~ to!string(inst.ip) ~ "]: TirError: " ~ message
+        );
+    }
+}
+
+class TirTypeError : TirError {
+    this(string msg, string file = __FILE__, size_t line = __LINE__) {
+        super(msg, file, line);
+    }
+
+    static void raise(string name, Tir inst, Element[] els) {
         string sig = els.map!("to!string(a.type)")
                         .array
                         .join(", ");
 
-        throw new TirTypeError(name ~ " cannot be called with argument signature: " ~ sig);
+        TirError.raise(inst,
+            name ~ " cannot be called with argument signature: " ~
+            sig ~ "\nStack:" ~
+            inst.stack.map!(a => "    " ~ to!string(a)).join("\n")
+        );
     }
 }
 
@@ -198,7 +214,7 @@ class Tokenizer {
     void step() {
         Token next = new Token();
         next.start = ptr;
-        int implicitIndex = code.indexOf('⦀', ptr);
+        long implicitIndex = code.indexOf('⦀', ptr);
         if(implicitIndex != -1) {
             next.type = TokenType.implicitString;
             while(ptr <= implicitIndex) {
@@ -480,6 +496,12 @@ class Element {
     static signature twoStrings = [ElementType.string, ElementType.string];
     static signature anyTwo = [ElementType.any, ElementType.any];
 
+    static multiElement idFunction() {
+        return delegate Element(Tir inst, signature sig, Element[] args) {
+            return args[0];
+        };
+    }
+
     static signature anyN(size_t n) {
         return cycle([ElementType.any]).take(n).array;
     }
@@ -543,7 +565,7 @@ voidTir caseFunction(string name, matcher[] cases) {
         }
 
         assert(inst.matchSignature(Element.anyOne, sig, els));
-        TirTypeError.raise(name, els);
+        TirTypeError.raise(name, inst, els);
     };
 }
 
@@ -1086,6 +1108,7 @@ class Tir {
                     Element[] temp;
                     inst.callOp(fn, temp, args[0]);
                     Element res = temp.pop;
+                    writeln("res =", res);
                     assert(res.type == ElementType.number);
                     int type = to!int(res.value.num);
 
@@ -1139,24 +1162,17 @@ class Tir {
             }
         };
         // multiplication
-        base.ops['×'] = delegate void(Tir inst) {
-            Element[] els;
-            signature sig;
-            if(inst.matchSignature(Element.oneArray, sig, els)) {
-                Element[] a;
-                inst.assignSignature(sig, els, &a);
-                inst.push(a);
-                inst.runAsChild("⤚×");
-            }
-            else if(inst.matchSignature(Element.twoNumbers, sig, els)) {
+        base.ops['×'] = caseFunction("× (Multiply)", [
+            matcher(Element.oneArray, delegate Element(Tir inst, signature sig, Element[] args) {
+                inst.runAsChild("⤚×", args[0]);
+                return null;
+            }),
+            matcher(Element.twoNumbers, delegate Element(Tir inst, signature sig, Element[] args) {
                 BigInt a, b;
-                inst.assignSignature(sig, els, &a, &b);
-                inst.push(a * b);
-            }
-            else {
-                TirTypeError.raise("Multiply (×)", els);
-            }
-        };
+                inst.assignSignature(sig, args, &a, &b);
+                return Element(a + b);
+            }),
+        ]);
         // divide
         base.ops['÷'] = delegate void(Tir inst) {
             Element[] els;
@@ -1202,8 +1218,9 @@ class Tir {
         // ords
         base.ops['o'] = caseFunction("o (OrdinalOf)", [
             matcher(Element.oneString, delegate Element(Tir inst, signature sig, Element[] args) {
-                return Element(args[0].toArray.map!(a => Element(to!int(a.toString[0]))).array);
-            })
+                return Element(args[0].toArray[0]);
+            }),
+            matcher(Element.oneNumber, Element.idFunction)
         ]);
         // convert to function
         base.ops['⨐'] = delegate void(Tir inst) {
@@ -1217,48 +1234,34 @@ class Tir {
             inst.push(new Element(fn, "{" ~ s ~ "}"));
         };
         // join array
-        base.ops['⨝'] = delegate void(Tir inst) {
-            Element[] els;
-            signature sig;
-
-            Element[] arr;
-            // join by empty delimiter
-            if(inst.matchSignature(Element.oneArray, sig, els)) {
-                inst.assignSignature(sig, els, &arr);
-                inst.push(arr.mapstring.join);
-            }
-            // join by delimiter
-            else if(inst.matchSignature([ElementType.array, ElementType.any], sig, els)) {
+        base.ops['⨝'] = caseFunction("⨝ (Join)", [
+            matcher(Element.oneArray, delegate Element(Tir inst, signature sig, Element[] args) {
+                Element[] arr;
+                inst.assignSignature(sig, args, &arr);
+                return Element(arr.mapstring.join);
+            }),
+            matcher([ElementType.array, ElementType.any], delegate Element(Tir inst, signature sig, Element[] args) {
+                Element[] arr;
                 Element joiner;
-                inst.assignSignature(sig, els, &arr, &joiner);
-                inst.push(arr.mapstring.join(to!string(joiner)));
-            }
-            else if(inst.matchSignature(Element.anyOne, sig, els)) {
-                TirTypeError.raise("Join (⨝)", els);
-            }
-        };
+                inst.assignSignature(sig, args, &arr, &joiner);
+                return Element(arr.mapstring.join(to!string(joiner)));
+            }),
+        ]);
         // split string
-        base.ops['⟠'] = delegate void(Tir inst) {
-            Element[] els;
-            signature sig;
-            inst.needs(2);
-            if(inst.matchSignature(Element.twoStrings, sig, els)) {
+        base.ops['⟠'] = caseFunction("⟠ (Split)", [
+            matcher(Element.twoStrings, delegate Element(Tir inst, signature sig, Element[] args) {
                 string target, splitter;
-                inst.assignSignature(sig, els, &target, &splitter);
+                inst.assignSignature(sig, args, &target, &splitter);
                 string[] sections = target.split(splitter);
-                inst.push(sections.map!(e => new Element(e)).array);
-            }
-            else if(inst.matchSignature(Element.oneString, sig, els)) {
+                return Element(sections.map!(Element).array);
+            }),
+            matcher(Element.oneString, delegate Element(Tir inst, signature sig, Element[] args) {
                 string target;
-                inst.assignSignature(sig, els, &target);
+                inst.assignSignature(sig, args, &target);
                 string[] sections = target.split("");
-                inst.push(sections.map!(e => new Element(e)).array);
-            }
-            else if(inst.matchSignature(Element.anyOne, sig, els)) {
-                TirTypeError.raise("Split (⟠)", els);
-            }
-
-        };
+                return Element(sections.map!(Element).array);
+            }),
+        ]);
         // logical negation
         base.ops['¬'] = unary(delegate Element(Tir inst, Element el) {
             return new Element(!el.truthy);
@@ -1605,17 +1608,33 @@ class Tir {
             inst.push(a - b);
         };
         // modulus
-        base.ops['%'] = delegate void(Tir inst) {
+        base.ops['%'] = caseFunction("% (Mod)", [
+            matcher(Element.twoNumbers, delegate Element(Tir inst, signature sig, Element[] args) {
+                BigInt a, b;
+                inst.assignSignature(sig, args, &a, &b);
+                return Element(a % b);
+            }),
+        ]);
+        // meta: try-error
+        base.meta['⧊'] = delegate voidTir(Tir inst, string source, voidTir fn) {
+            voidTir otherwise;
             Element[] els;
             signature sig;
-            assert(inst.matchSignature(Element.twoNumbers, sig, els));
-            BigInt a, b;
-            inst.assignSignature(sig, els, &a, &b);
-            inst.push(a % b);
+            if(inst.matchSignature(Element.oneFunc, sig, els)) {
+                otherwise = els[0].value.fun;
+            }
+            return delegate void(Tir inst) {
+                try {
+                    fn(inst);
+                } catch(Exception e) {
+                    if(otherwise) otherwise(inst);
+                }
+            };
         };
 
         // ALIASES
-        base.aliasFunc('⨊', "#{2%}+");
+        base.aliasFunc('⨊', "#{⧊⦾2%}+");
+        base.aliasFunc('⦾', "{}⧊#o");
         base.aliasFunc('∄', "∃¬");
         base.aliasFunc('⅋', "⇔&");
     }
@@ -1688,6 +1707,8 @@ int main(string[] args) {
         inst.run();
     } catch(ExitException e) {
         return e.returnCode;
+    } catch(TirError e) {
+        stderr.writeln(e.message);
     }
 
     foreach(el; inst.stack) {
