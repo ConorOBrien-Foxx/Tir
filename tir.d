@@ -245,7 +245,7 @@ class Tokenizer {
             // next.raw ~= cur;
             // advance;
         }
-        // quote string « ... »
+        // quote string «...»
         else if(cur == '«') {
             int depth = 0;
             do {
@@ -476,13 +476,61 @@ class Element {
                         assert(0, "undefined cast from " ~ to!string(type) ~ " to " ~ to!string(castType) ~ "!");
                 }
 
+            // to a number
+            case ElementType.number:
+                switch(type) {
+                    case ElementType.string:
+                        return Element(BigInt(value.str));
+
+                    case ElementType.array:
+                        BigInt[] digits = value.arr.map!(a => a.castTo(ElementType.number).value.num).array;
+                        BigInt res = 0;
+                        foreach(digit; digits) {
+                            res *= 10;
+                            res += digit;
+                        }
+                        return Element(res);
+
+                    default:
+                        assert(0, "undefined cast from " ~ to!string(type) ~ " to " ~ to!string(castType) ~ "!");
+                }
+
             default:
-                assert(0, "no cast types are defined for class " ~ to!string(type) ~ "!");
+                assert(0, "no castTo cases are defined for type <" ~ to!string(castType) ~ ">!");
         }
     }
 
     Element[] toArray() {
         return castTo(ElementType.array).value.arr;
+    }
+
+    override bool opEquals(Object other) {
+        if(typeid(other) == typeid(Element)) {
+            return opEquals(cast(Element)other);
+        }
+        return false;
+    }
+
+    bool opEquals(Element other) {
+        if(other.type != type) {
+            return false;
+        }
+        switch(type) {
+            case ElementType.number:
+                return value.num == other.value.num;
+
+            case ElementType.string:
+                return value.str == other.value.str;
+
+            case ElementType.array:
+                if(value.arr.length != other.value.arr.length) {
+                    return false;
+                }
+                return zip(value.arr, other.value.arr).all!"a[0] == a[1]";
+
+            default:
+                assert(0, "No opEquals defined for two <" ~ to!string(type) ~ ">");
+        }
     }
 
     static signature oneFunc = [ElementType.func];
@@ -493,6 +541,7 @@ class Element {
     static signature anyOne = [ElementType.any];
 
     static signature twoNumbers = [ElementType.number, ElementType.number];
+    static signature twoArrays = [ElementType.array, ElementType.array];
     static signature twoStrings = [ElementType.string, ElementType.string];
     static signature anyTwo = [ElementType.any, ElementType.any];
 
@@ -1035,6 +1084,10 @@ class Tir {
                 return Element(a.range.map!(Element).array);
             })
         ]);
+        // input
+        base.ops['i'] = delegate void(Tir inst) {
+            inst.push(inst.arguments.consume);
+        };
         // type cast
         base.ops['t'] = caseFunction("t (TypeCast)", [
             matcher(Element.anyTwo, delegate Element(Tir inst, signature sig, Element[] args) {
@@ -1043,6 +1096,28 @@ class Tir {
                 return first.castTo(like.type);
             })
         ]);
+        // meta: type cast
+        base.meta['∷'] = delegate voidTir(Tir inst, string source, voidTir fn) {
+            return caseFunction("∷ (TypeCastMeta)", [
+                matcher(Element.anyOne, delegate Element(Tir inst, signature sig, Element[] args) {
+                    Element source;
+                    inst.assignSignature(sig, args, &source);
+
+                    Element res = inst.callOp(fn, source);
+                    assert(res.type == ElementType.number, "expected a number in TypeCastMeta");
+
+                    int type = to!int(res.value.num);
+
+                    return source.castTo(to!ElementType(type));
+                })
+            ]);
+        };
+        base.ops['='] = caseFunction("= (Equal)", [
+            matcher(Element.anyTwo, delegate Element(Tir inst, signature sig, Element[] args) {
+                return Element(args[0] == args[1]);
+            })
+        ]);
+        base.aliasFunc('≠', "=¬");
         // call/negate
         base.ops['~'] = caseFunction("~ (Negate)", [
             matcher(Element.oneFunc, delegate Element(Tir inst, signature sig, Element[] args) {
@@ -1108,7 +1183,7 @@ class Tir {
                     Element[] temp;
                     inst.callOp(fn, temp, args[0]);
                     Element res = temp.pop;
-                    writeln("res =", res);
+                    /* writeln("res =", res); */
                     assert(res.type == ElementType.number);
                     int type = to!int(res.value.num);
 
@@ -1215,10 +1290,10 @@ class Tir {
             writeln(els[0]);
             inst.push(els[0]);
         };
-        // ords
+        // ord
         base.ops['o'] = caseFunction("o (OrdinalOf)", [
             matcher(Element.oneString, delegate Element(Tir inst, signature sig, Element[] args) {
-                return Element(args[0].toArray[0]);
+                return Element(to!int(args[0].toArray[0].value.str[0]));
             }),
             matcher(Element.oneNumber, Element.idFunction)
         ]);
@@ -1337,6 +1412,17 @@ class Tir {
                 inst.push(Rational(num, den));
             };
         };
+        // GetIndex
+        base.ops['@'] = caseFunction("@ (GetIndex)", [
+            matcher([ElementType.arrayLike, ElementType.number], delegate Element(Tir inst, signature sig, Element[] args) {
+                Element[] arr;
+                BigInt index;
+                inst.assignSignature(sig, args, &arr, &index);
+                size_t resIndex = to!size_t(index % arr.length);
+                return arr[resIndex];
+            })
+        ]);
+        // swap top two
         base.ops['↔'] = delegate void(Tir inst) {
             Element[] topTwo = inst.popN(2);
             inst.pushMulti(topTwo.retro.array);
@@ -1390,8 +1476,7 @@ class Tir {
             return delegate void(Tir inst) {
                 Element top = inst.pop;
 
-                assert(top.type == ElementType.array);
-                Element[] a = top.value.arr;
+                Element[] a = top.toArray;
 
                 while(a.length != 1) {
                     inst.callOp(fn, a, a);
@@ -1404,8 +1489,7 @@ class Tir {
             return delegate void(Tir inst) {
                 Element top = inst.pop;
 
-                assert(top.type == ElementType.array);
-                Element[] a = top.value.arr.retro.array;
+                Element[] a = top.toArray.retro.array;
                 /* fn = meta['⇔'](inst, source, fn); */
 
                 while(a.length != 1) {
@@ -1519,13 +1603,13 @@ class Tir {
                 inst.runAsChild("→⨝");
             };
         };
-        // quote function
+        // meta: quote function
         base.meta['$'] = delegate voidTir(Tir inst, string source, voidTir mod) {
             return delegate void(Tir inst) {
                 inst.push(new Element(mod, source));
             };
         };
-        // thread
+        // meta: thread
         base.meta['#'] = delegate voidTir(Tir inst, string source, voidTir mod) {
             return delegate void(Tir inst) {
                 Element top = inst.pop.castTo(ElementType.array);
@@ -1537,6 +1621,20 @@ class Tir {
                     return res;
                 }).array);
             };
+        };
+        // meta: zipwith
+        base.meta['⨼'] = delegate voidTir(Tir inst, string source, voidTir mod) {
+            return caseFunction("⨼" ~ source ~ " (ZipWithMeta)", [
+                matcher(Element.twoArrays, delegate Element(Tir inst, signature sig, Element[] args) {
+                    Element[] as, bs;
+                    inst.assignSignature(sig, args, &as, &bs);
+                    Element[] res;
+                    foreach(a, b; lockstep(as, bs)) {
+                        res ~= inst.callOp(mod, a, b);
+                    }
+                    return Element(res);
+                })
+            ]);
         };
         // map
         // arr func →
@@ -1633,17 +1731,41 @@ class Tir {
         };
 
         // ALIASES
-        base.aliasFunc('⨊', "#{⧊⦾2%}+");
+        // mod 2 sum
+        base.aliasFunc('⧖', "2%");
+        base.aliasFunc('⨊', "⦾#⧖+");
+        base.aliasFunc('⧗', "2%1=");
+        // all ords
         base.aliasFunc('⦾', "{}⧊#o");
         base.aliasFunc('∄', "∃¬");
         base.aliasFunc('⅋', "⇔&");
     }
 }
 
+Element parseInput(string e) {
+    if(e[0] == '[') {
+        // parse array
+        Element[] res;
+        foreach(sxn; e[1..$-1].split(',')) {
+            res ~= parseInput(sxn.strip);
+        }
+        return Element(res);
+    }
+    else if(e[0].isDigit) {
+        return Element(BigInt(e));
+    }
+    else if(e[0] == '"') {
+        return Element(e[1..$-1]);
+    }
+    else {
+        return Element(e);
+    }
+}
+
 class ArgumentConsumer : Consumer!Element {
     this(string[] args) {
         super(args.map!(delegate Element(string e) {
-            return Element(e);
+            return e.parseInput;
         }).array, Element(0));
     }
 }
