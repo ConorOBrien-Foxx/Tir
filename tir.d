@@ -647,6 +647,20 @@ class Consumer(T) {
     }
 }
 
+bool isPrime(BigInt a) {
+    if(a.among(2, 3, 5, 7, 11, 13, 17, 19, 23, 29)) {
+        return true;
+    }
+    else if(a % 2 == 0 || a % 3 == 0 || a % 5 == 0
+    || a % 7 == 0 || a % 11 == 0 || a % 13 == 0) {
+        return false;
+    }
+    for(BigInt i = 17; i <= a.isqrt; i += 6) {
+        if (a % i == 0 || a % (i + 2) == 0) return false;
+    }
+    return true;
+}
+
 T[] rotateLeft(T, K)(T[] arr, K n = 1) {
     n.times(delegate void() {
         arr = arr[$-1] ~ arr[0..$-1];
@@ -662,6 +676,28 @@ T[] rotateRight(T, K)(T[] arr, K n = 1) {
 T[] rotate(T, K)(T[] arr, K n = 1) {
     if(n < 0) return rotateRight(arr, -n);
     else      return rotateLeft(arr, n);
+}
+
+Element[] vectorize(Tir inst, voidTir fn, Element[] as, Element[] bs) {
+    size_t maxSize = max(as.length, bs.length);
+    Element[] res;
+    Element a, b;
+    foreach(i; 0..maxSize) {
+        a = as[i % as.length];
+        b = bs[i % bs.length];
+        res ~= inst.callOp(fn, a, b);
+    }
+    return res;
+}
+
+// vaguely based off of https://stackoverflow.com/a/11962756/4119004
+BigInt isqrt(BigInt x) {
+    if(x == BigInt(0) || x == BigInt(1)) {
+        return x;
+    }
+    BigInt i;
+    for(i = x / 2; i > x / i; i = (x / i + i) / 2) {}
+    return i;
 }
 
 class Tir {
@@ -1069,9 +1105,11 @@ class Tir {
         base.setVar('A', "ABCDEFGHIJKLMNOPQRSTUVWXYZ");
         base.setVar('B', "abcdefghijklmnopqrstuvwxyz");
         base.setVar('E', "");
+        base.setVar('F', false);
         base.setVar('N', "\n");
+        base.setVar('M', "\t");
         base.setVar('S', " ");
-        base.setVar('T', "\t");
+        base.setVar('T', true);
         base.setVar('Y', []);
     }
 
@@ -1082,6 +1120,14 @@ class Tir {
                 BigInt a;
                 inst.assignSignature(sig, args, &a);
                 return Element(a.range.map!(Element).array);
+            })
+        ]);
+        // sqrt
+        base.ops['√'] = caseFunction("√ (SquareRoot)", [
+            matcher(Element.oneNumber, delegate Element(Tir inst, signature sig, Element[] args) {
+                BigInt a;
+                inst.assignSignature(sig, args, &a);
+                return Element(a.isqrt);
             })
         ]);
         // input
@@ -1226,7 +1272,7 @@ class Tir {
             if(inst.matchSignature(Element.twoNumbers, sig, els)) {
                 BigInt a, b;
                 inst.assignSignature(sig, els, &a, &b);
-                Element[] res = [];
+                Element[] res;
                 for(BigInt i = a; i < b; i++) {
                     res ~= new Element(i);
                 }
@@ -1236,6 +1282,19 @@ class Tir {
                 writeln("no ops");
             }
         };
+        // bidirectional inclusive range
+        base.ops['∠'] = caseFunction("∠ (BidirectionalRange)", [
+            matcher(Element.twoNumbers, delegate Element(Tir inst, signature sig, Element[] args) {
+                BigInt a, b;
+                inst.assignSignature(sig, args, &a, &b);
+                int dir = 2 * to!int(a < b) - 1;
+                Element[] res;
+                for(BigInt i = a; i != b + dir; i += dir) {
+                    res ~= Element(i);
+                }
+                return Element(res);
+            })
+        ]);
         // multiplication
         base.ops['×'] = caseFunction("× (Multiply)", [
             matcher(Element.oneArray, delegate Element(Tir inst, signature sig, Element[] args) {
@@ -1471,6 +1530,14 @@ class Tir {
                 }
             };
         };
+        // meta: if
+        base.meta['?'] = delegate voidTir(Tir inst, string source, voidTir fn) {
+            return delegate void(Tir inst) {
+                if(inst.pop.truthy) {
+                    fn(inst);
+                }
+            };
+        };
         // meta: reduce right
         base.meta['⤚'] = delegate voidTir(Tir inst, string source, voidTir fn) {
             return delegate void(Tir inst) {
@@ -1676,7 +1743,14 @@ class Tir {
                 inst.push(arr.map!(e => e.toString()).array.join(", "));
             }
         };
-        base.ops['+'] = caseFunction("Add (+)", [
+        base.ops['⧉'] = caseFunction("⧉ (IsPrime)", [
+            matcher(Element.oneNumber, delegate Element(Tir inst, signature sig, Element[] args) {
+                BigInt a;
+                inst.assignSignature(sig, args, &a);
+                return Element(a.isPrime);
+            }),
+        ]);
+        base.ops['+'] = caseFunction("+ (Add)", [
             matcher(Element.oneArray, delegate Element(Tir inst, signature sig, Element[] args) {
                 inst.runAsChild("⤚+", args);
                 return null;
@@ -1729,10 +1803,39 @@ class Tir {
                 }
             };
         };
+        // meta: vectorize
+        base.meta['⨳'] = delegate voidTir(Tir inst, string source, voidTir fn) {
+            return caseFunction("MetaVectorize (" ~ source ~ ")", [
+                matcher(Element.twoArrays, delegate Element(Tir inst, signature sig, Element[] args) {
+                    // resize to match
+                    Element[] as, bs;
+                    inst.assignSignature(sig, args, &as, &bs);
+                    return Element(inst.vectorize(fn, as, bs));
+                }),
+                matcher([ElementType.array, ElementType.any], delegate Element(Tir inst, signature sig, Element[] args) {
+                    Element[] as;
+                    Element b;
+                    inst.assignSignature(sig, args, &as, &b);
+                    return Element(inst.vectorize(fn, as, [b]));
+                }),
+                matcher([ElementType.any, ElementType.array], delegate Element(Tir inst, signature sig, Element[] args) {
+                    Element a;
+                    Element[] bs;
+                    inst.assignSignature(sig, args, &a, &bs);
+                    return Element(inst.vectorize(fn, [a], bs));
+                }),
+            ]);
+        };
 
         // ALIASES
-        // mod 2 sum
+        // 1-range
+        base.aliasFunc('∟', "1↔1+r");
+        // decrement
+        base.aliasFunc('⤈', "1-");
+        // increment
+        base.aliasFunc('⤉', "1+");
         base.aliasFunc('⧖', "2%");
+        // mod 2 sum
         base.aliasFunc('⨊', "⦾#⧖+");
         base.aliasFunc('⧗', "2%1=");
         // all ords
